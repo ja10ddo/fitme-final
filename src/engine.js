@@ -1,1184 +1,2111 @@
-const id = (prefix) => `${prefix}_${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
+import { useEffect, useMemo, useState } from 'react'
+import {
+  Activity,
+  BarChart3,
+  Bell,
+  Calculator,
+  Check,
+  ChevronRight,
+  Dumbbell,
+  Edit3,
+  Flame,
+  Home,
+  Info,
+  Library,
+  Plus,
+  RefreshCw,
+  Save,
+  ShieldCheck,
+  Sparkles,
+  Timer,
+  Trash2,
+  Trophy,
+  UserRoundX,
+} from 'lucide-react'
+import './App.css'
+import {
+  EVENT_META,
+  SPORT_PROFILES,
+  applyWorkoutAdjustment,
+  buildFallbackProgram,
+  estimatedOneRepMax,
+  normalizeProfile,
+  parseSocialWorkout,
+  programSignature,
+  safeExercise,
+  substituteExercise,
+  validateProfile,
+  validateSet,
+} from './engine'
+import { getExerciseInstruction } from './exerciseInstructions'
+import { EQUIPMENT_ACCESS_BY_SETUP, EQUIPMENT_ACCESS_LABELS, TRAINING_SETUP_OPTIONS, defaultEquipmentAccess } from './setupOptions'
+import { clearAccount, exportJson, loadData, saveData } from './storage'
 
-export const EVENT_META = {
-  none: { label: 'None', focus: 'General performance' },
-  '5k': { label: '5K', runDays: 3, longRun: 4, peak: 6, focus: 'speed endurance' },
-  '10k': { label: '10K', runDays: 3, longRun: 5, peak: 8, focus: 'threshold pacing' },
-  half: { label: 'Half Marathon', runDays: 4, longRun: 7, peak: 12, focus: 'aerobic durability' },
-  marathon: { label: 'Marathon', runDays: 4, longRun: 9, peak: 20, focus: 'long-run progression' },
-  triathlon: { label: 'Triathlon', runDays: 2, longRun: 5, peak: 10, focus: 'swim-bike-run balance' },
-  hyrox: { label: 'Hyrox', runDays: 2, longRun: 4, peak: 7, focus: 'compromised running and work capacity' },
-  crossfit: { label: 'CrossFit', runDays: 1, longRun: 3, peak: 5, focus: 'mixed modal power' },
+const tabs = [
+  { id: 'home', label: 'Home', icon: Home },
+  { id: 'plan', label: 'Plan', icon: Sparkles },
+  { id: 'library', label: 'Library', icon: Library },
+  { id: 'progress', label: 'Progress', icon: BarChart3 },
+  { id: 'tools', label: 'Tools', icon: Calculator },
+]
+
+const GOAL_OPTIONS = ['strength', 'muscle', 'fat_loss', 'health', 'endurance', 'sport_power', 'independence', 'hybrid']
+const GOAL_LABELS = {
+  strength: 'Strength',
+  muscle: 'Muscle',
+  fat_loss: 'Fat loss',
+  health: 'Health and energy',
+  endurance: 'Endurance',
+  sport_power: 'Sport speed and power',
+  independence: 'Independence',
+  hybrid: 'Hybrid',
 }
 
-export const RESEARCH_RULES = {
-  health: {
-    label: 'HHS adult activity target',
-    source: 'Physical Activity Guidelines for Americans, 2nd ed.',
-    prescription: 'Build toward 150-300 min/week moderate aerobic activity plus 2+ days/week major-muscle strengthening.',
-  },
-  olderAdult: {
-    label: 'Older-adult multicomponent training',
-    source: 'Physical Activity Guidelines for Americans, 2nd ed.',
-    prescription: 'Include aerobic, strengthening, mobility, and balance work; scale effort to current fitness.',
-  },
-  chronicCondition: {
-    label: 'Chronic-condition safety',
-    source: 'Physical Activity Guidelines for Americans, 2nd ed.',
-    prescription: 'Start low, progress gradually, choose safer activities, and stay within clinician guidance.',
-  },
-  strength: {
-    label: 'Strength prescription heuristic',
-    source: 'ACSM/NSCA-style resistance training practice',
-    prescription: 'Prioritize specific compound patterns, lower reps, longer rests, and progressive overload.',
-  },
-  hypertrophy: {
-    label: 'Hypertrophy prescription heuristic',
-    source: 'ACSM/NSCA-style resistance training practice',
-    prescription: 'Use moderate reps, repeated hard sets, and enough weekly volume for the target muscles.',
-  },
-  enduranceEvent: {
-    label: 'Endurance event progression',
-    source: 'Endurance coaching consensus and taper literature',
-    prescription: 'Build aerobic volume progressively, protect recovery, peak before the event, then taper into race week.',
-  },
-  powerSport: {
-    label: 'Sport power and in-season fatigue management',
-    source: 'Strength and conditioning practice',
-    prescription: 'Keep power work high quality, low fatigue, and capped during in-season periods.',
-  },
+const TRAINING_SPLIT_OPTIONS = ['push_pull_legs', 'body_part', 'upper_lower']
+const TRAINING_SPLIT_LABELS = {
+  push_pull_legs: 'Push / Pull / Legs',
+  body_part: 'Body part split',
+  upper_lower: 'Upper / Lower',
 }
 
-export const SPORT_PROFILES = {
-  none: { label: 'None', qualities: ['balanced strength', 'conditioning'] },
-  basketball: { label: 'Basketball', qualities: ['vertical power', 'ankle stiffness', 'repeat sprint ability'] },
-  volleyball: { label: 'Volleyball', qualities: ['vertical power', 'landing mechanics', 'shoulder durability', 'lateral quickness'] },
-  soccer: { label: 'Soccer', qualities: ['single-leg strength', 'hamstring resilience', 'aerobic repeatability'] },
-  hockey: { label: 'Hockey', qualities: ['lateral power', 'adductor resilience', 'trunk rotation'] },
-  football: { label: 'Football', qualities: ['acceleration', 'neck and trunk strength', 'power'] },
-  baseball: { label: 'Baseball', qualities: ['rotational power', 'shoulder control', 'posterior chain'] },
-  tennis: { label: 'Tennis', qualities: ['lateral deceleration', 'rotational control', 'shoulder durability'] },
-  golf: { label: 'Golf', qualities: ['hip rotation', 'anti-rotation strength', 'posterior chain'] },
-  running: { label: 'Running', qualities: ['calf capacity', 'hip stability', 'aerobic base'] },
-  cycling: { label: 'Cycling', qualities: ['quad endurance', 'hip mobility', 'trunk stamina'] },
-  swimming: { label: 'Swimming', qualities: ['lat strength', 'shoulder control', 'breathing rhythm'] },
-  combat: { label: 'Combat Sports', qualities: ['grip strength', 'neck strength', 'anaerobic repeatability'] },
+const ENGINE_SCHEMA_VERSION = 4
+const DATA_SCHEMA_VERSION = 2
+
+const quickDefaults = {
+  goal: ['health'],
+  equipment: 'commercial gym',
+  equipmentAccess: defaultEquipmentAccess('commercial gym'),
+  equipmentDetail: '',
+  days: 3,
+  duration: '45-60 min',
+  level: 'beginner',
+  limitations: '',
+  sport: ['none'],
+  customSport: '',
+  eventGoal: 'none',
+  exercisesPerDay: 6,
+  split: ['upper_lower'],
 }
 
-const asArray = (value) => {
-  if (Array.isArray(value)) return value.filter(Boolean)
-  return value ? [value] : []
+const customDefaults = {
+  age: 34,
+  gender: 'prefer not to say',
+  bodyType: 'average',
+  goal: ['strength', 'muscle'],
+  sport: ['none'],
+  customSport: '',
+  sportPosition: '',
+  seasonPhase: 'off-season',
+  eventGoal: 'none',
+  eventDate: '',
+  trainingStructure: 'hybrid',
+  equipment: 'commercial gym',
+  equipmentAccess: defaultEquipmentAccess('commercial gym'),
+  equipmentDetail: '',
+  cardio: ['zone 2'],
+  days: 4,
+  duration: '45-60 min',
+  split: ['upper_lower'],
+  exercisesPerDay: 6,
+  level: 'intermediate',
+  focus: ['progressive overload'],
+  limitations: '',
 }
 
-const selectedSports = (profile) => asArray(profile.sport).filter((sport) => sport && sport !== 'none')
-
-const customSportProfile = (sportText = '') => {
-  const label = sportText.trim().slice(0, 60)
-  if (!label) return null
-  const lower = label.toLowerCase()
-  const matched =
-    lower.includes('volley') ? ['vertical power', 'landing mechanics', 'shoulder durability', 'lateral quickness']
-    : lower.includes('rugby') || lower.includes('lacrosse') ? ['contact resilience', 'acceleration', 'rotational power']
-    : lower.includes('dance') || lower.includes('gymnast') || lower.includes('cheer') ? ['single-leg control', 'mobility', 'core stiffness']
-    : lower.includes('martial') || lower.includes('boxing') || lower.includes('wrestling') ? ['grip strength', 'neck strength', 'anaerobic repeatability']
-    : lower.includes('track') || lower.includes('sprint') ? ['acceleration', 'posterior chain power', 'elastic stiffness']
-    : lower.includes('pickle') || lower.includes('badminton') || lower.includes('racquet') ? ['lateral deceleration', 'rotational control', 'shoulder durability']
-    : ['balanced strength', 'joint resilience', 'conditioning']
-  return { label, qualities: matched }
-}
-
-const sportDetails = (profile) => {
-  const sports = selectedSports(profile).filter((sport) => sport !== 'other')
-  const custom = customSportProfile(profile.customSport || profile.sportOther || '')
-  if (!sports.length && !custom) return { label: 'None', qualities: ['balanced strength', 'conditioning'] }
-  const profiles = sports.map((sport) => SPORT_PROFILES[sport]).filter(Boolean)
-  if (custom) profiles.push(custom)
+const savedProfileFields = (profile = {}) => {
+  const source = profile && typeof profile === 'object' ? profile : {}
   return {
-    label: profiles.map((sport) => sport.label).join(' + '),
-    qualities: [...new Set(profiles.flatMap((sport) => sport.qualities))],
+    age: source.age ?? customDefaults.age,
+    gender: source.gender || customDefaults.gender,
+    bodyType: source.bodyType || customDefaults.bodyType,
+    equipment: source.equipment || customDefaults.equipment,
+    equipmentAccess: Array.isArray(source.equipmentAccess) && source.equipmentAccess.length
+      ? source.equipmentAccess
+      : defaultEquipmentAccess(source.equipment || customDefaults.equipment),
+    equipmentDetail: source.equipmentDetail || '',
+    level: source.level || customDefaults.level,
+    limitations: source.limitations || '',
   }
 }
 
-const EX_POOL = {
-  squat: [
-    'Back Squat',
-    'Front Squat',
-    'Goblet Squat',
-    'Chair Squat',
-    'Assisted Squat',
-    'Box Squat',
-    'Safety Bar Squat',
-    'Rear-Foot Elevated Split Squat',
-  ],
-  hinge: ['Romanian Deadlift', 'Trap Bar Deadlift', 'Hip Thrust', 'Cable Pull-Through', 'Kettlebell Swing', 'Banded Glute Bridge'],
-  push: [
-    'Bench Press',
-    'Incline Dumbbell Press',
-    'Machine Chest Press',
-    'Cable Fly',
-    'Pec Deck',
-    'Decline Push-Up',
-    'Push-Up',
-    'Landmine Press',
-    'Band Chest Press',
-    'Low-to-High Band Fly',
-  ],
-  pull: ['Pull-Up', 'Lat Pulldown', 'Chest-Supported Row', 'Cable Row', 'Single-Arm Dumbbell Row', 'Seated Machine Row', 'Face Pull', 'Band Row'],
-  overhead: ['Dumbbell Shoulder Press', 'Half-Kneeling Landmine Press', 'Machine Shoulder Press', 'Pike Push-Up', 'Band Face Pull'],
-  arms: ['Cable Triceps Pressdown', 'Dumbbell Curl', 'Hammer Curl', 'Overhead Triceps Extension', 'EZ-Bar Curl', 'Band Curl', 'Band Triceps Pressdown'],
-  core: ['Dead Bug', 'Pallof Press', 'Side Plank', 'Cable Chop', 'Farmer Carry'],
-  legs: ['Walking Lunge', 'Step-Up', 'Leg Press', 'Hamstring Curl', 'Calf Raise', 'Banded Lateral Walk'],
-  cardio: ['Zone 2 Run', 'Low-Impact Bike', 'Bike Intervals', 'Rower Intervals', 'Incline Walk', 'SkiErg Intervals', 'Brisk Walk Intervals'],
-  mobility: ['Couch Stretch', 'Hip Airplane', 'Thoracic Rotation', 'Ankle Rocks', 'Banded Shoulder External Rotation'],
-  balance: ['Sit-to-Stand', 'Supported Single-Leg Balance', 'Heel-to-Toe Walk', 'Farmer Carry March', 'Step-Down Control'],
+const buildQuickDefaults = (savedProfile) => {
+  const saved = savedProfileFields(savedProfile)
+  return {
+    ...quickDefaults,
+    equipment: saved.equipment,
+    equipmentAccess: saved.equipmentAccess,
+    equipmentDetail: saved.equipmentDetail,
+    level: saved.level,
+    limitations: saved.limitations,
+  }
 }
 
-const LIMITATION_RULES = {
-  shoulder: ['bench', 'press', 'fly', 'pec deck', 'pull-up', 'pulldown', 'shoulder', 'pike', 'push-up', 'external rotation'],
-  knee: ['squat', 'lunge', 'step-up', 'leg press', 'box squat', 'safety bar', 'split squat'],
-  back: ['back squat', 'deadlift', 'romanian deadlift', 'kettlebell swing', 'good morning'],
-  wrist: ['push-up', 'front squat', 'bench press', 'farmer carry'],
-  ankle: ['run', 'jump', 'lunge', 'step-up', 'calf raise'],
-  arthritis: ['jump', 'run', 'burpee'],
-  obesity: ['jump', 'burpee', 'zone 2 run'],
-  sedentary: ['jump', 'burpee', 'sprint'],
-  rotator: ['bench', 'press', 'fly', 'pec deck', 'pull-up', 'pulldown', 'push-up', 'shoulder press', 'pike', 'overhead'],
+const buildCustomDefaults = (savedProfile) => {
+  const saved = savedProfileFields(savedProfile)
+  return {
+    ...customDefaults,
+    ...saved,
+    goal: customDefaults.goal,
+    sport: customDefaults.sport,
+    customSport: '',
+    sportPosition: '',
+    seasonPhase: customDefaults.seasonPhase,
+    eventGoal: 'none',
+    eventDate: '',
+    days: customDefaults.days,
+    duration: customDefaults.duration,
+    split: customDefaults.split,
+    exercisesPerDay: customDefaults.exercisesPerDay,
+  }
 }
 
-const AVOID_KEYWORDS = {
-  squat: ['squat'],
-  squats: ['squat'],
-  lunge: ['lunge'],
-  lunges: ['lunge'],
-  running: ['run', 'zone 2 run'],
-  run: ['run', 'zone 2 run'],
-  jumping: ['jump'],
-  pressing: ['press'],
-  press: ['press'],
-  deadlift: ['deadlift'],
-  deadlifts: ['deadlift'],
+function App() {
+  const [data, setData] = useState(() => migrateData(loadData()))
+  const [tab, setTab] = useState('home')
+  const [selectedProgramId, setSelectedProgramId] = useState(null)
+  const [activeWorkout, setActiveWorkout] = useState(null)
+  const [workoutSummary, setWorkoutSummary] = useState(null)
+  const [toast, setToast] = useState('')
+
+  useEffect(() => {
+    const result = saveData(data)
+    if (!result || result.ok) return undefined
+    const timer = setTimeout(() => setToast(result.message), 0)
+    return () => clearTimeout(timer)
+  }, [data])
+  useEffect(() => {
+    if (!toast) return undefined
+    const timer = setTimeout(() => setToast(''), 2500)
+    return () => clearTimeout(timer)
+  }, [toast])
+
+  const selectedProgram = data.programs.find((program) => program.id === selectedProgramId) ?? data.programs[0]
+  const stats = useMemo(() => computeStats(data), [data])
+
+  const upsertProgram = (program) => {
+    setData((current) => ({
+      ...current,
+      programs: current.programs.some((item) => item.id === program.id)
+        ? current.programs.map((item) => (item.id === program.id ? program : item))
+        : [program, ...current.programs],
+      profile: current.profile,
+    }))
+    setSelectedProgramId(program.id)
+  }
+
+  const saveProgramFromProfile = (profile) => {
+    const cleanProfile = normalizeProfile(profile)
+    const signature = programSignature(cleanProfile)
+    const existing = data.programs.find((program) => program.signature === signature)
+    if (existing) {
+      setSelectedProgramId(existing.id)
+      setTab('library')
+      setToast('Matching plan already exists')
+      return
+    }
+    const program = buildFallbackProgram(cleanProfile)
+    setData((current) => ({ ...current, profile: savedProfileFields(cleanProfile), programs: [program, ...current.programs] }))
+    setSelectedProgramId(program.id)
+    setTab('library')
+    setToast('Program auto-saved to Library')
+  }
+
+  const finishWorkout = (payload) => {
+    setData((current) => {
+      const logs = [payload.log, ...current.logs]
+      const prs = mergePrs(current.prs, payload.log.exercisesLogged, current.unit)
+      const achievements = unlockAchievements({ ...current, logs, prs })
+      return { ...current, logs, prs, achievements }
+    })
+    setWorkoutSummary(buildWorkoutSummary(payload.log, activeWorkout?.program))
+    setActiveWorkout(null)
+    setTab('home')
+    setToast('Workout logged')
+  }
+
+  if (activeWorkout) {
+    return (
+      <ActiveWorkout
+        workout={activeWorkout.workout}
+        program={activeWorkout.program}
+        unit={data.unit}
+        logs={data.logs}
+        prs={data.prs}
+        onCancel={() => setActiveWorkout(null)}
+        onFinish={finishWorkout}
+        onSwap={(original, replacement, persistent) => {
+          if (!activeWorkout.program) return
+          const updated = substituteExercise(activeWorkout.program, original, replacement, persistent)
+          upsertProgram(updated)
+          setActiveWorkout({
+            ...activeWorkout,
+            program: updated,
+            workout: replaceExerciseInWorkout(activeWorkout.workout, original, replacement),
+          })
+          setToast(persistent ? 'Exercise excluded from this program' : 'Exercise swapped')
+        }}
+      />
+    )
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="app-header">
+        <button className="brand" type="button" onClick={() => setTab('home')} aria-label="Go to FitMe home">
+          <span className="brand-mark">FM</span>
+          <span>
+            <strong>FitMe</strong>
+            <small>Adaptive training</small>
+          </span>
+        </button>
+        <button className="icon-button" type="button" aria-label="Delete account data" onClick={() => confirmDelete(setData, setToast)}>
+          <UserRoundX size={19} />
+        </button>
+      </header>
+
+      <main>
+        {tab === 'home' && (
+          <HomeScreen
+            data={data}
+            stats={stats}
+            onPlan={() => setTab('plan')}
+            onImport={() => setTab('plan')}
+            onStart={(program, workout) => setActiveWorkout({ program, workout })}
+          />
+        )}
+        {tab === 'plan' && <PlanScreen savedProfile={data.profile} onSave={saveProgramFromProfile} onSaveWorkout={(workout) => setData((current) => ({ ...current, savedWorkouts: [workout, ...current.savedWorkouts] }))} setToast={setToast} />}
+        {tab === 'library' && (
+          <LibraryScreen
+            programs={data.programs}
+            savedWorkouts={data.savedWorkouts}
+            selectedProgram={selectedProgram}
+            onSelect={(program) => setSelectedProgramId(program.id)}
+            onDelete={(programId) => setData((current) => ({ ...current, programs: current.programs.filter((program) => program.id !== programId) }))}
+            onDeleteWorkout={(workoutId) => setData((current) => ({ ...current, savedWorkouts: current.savedWorkouts.filter((workout) => workout.id !== workoutId) }))}
+            onStart={(program, workout) => setActiveWorkout({ program, workout })}
+            onStartSaved={(workout) => setActiveWorkout({ workout })}
+            onAdjust={(program, week, feedback) => {
+              upsertProgram(applyWorkoutAdjustment(program, week, feedback))
+              setToast('Remaining sessions adjusted')
+            }}
+            onRegenerate={(program, patch) => {
+              upsertProgram(regenerateFutureWeeks(program, patch))
+              setToast('Future weeks regenerated')
+            }}
+            onWeekSelect={(program, nextWeek) => {
+              upsertProgram({ ...program, currentWeek: nextWeek })
+              setToast(`Showing week ${nextWeek}`)
+            }}
+            onSwap={(program, original, replacement, persistent) => {
+              upsertProgram(substituteExercise(program, original, replacement, persistent))
+              setToast(persistent ? 'Persistent exclusion saved' : 'Exercise swapped')
+            }}
+          />
+        )}
+        {tab === 'progress' && (
+          <ProgressScreen
+            data={data}
+            stats={stats}
+            onExport={() => exportJson(data)}
+            onMeasurement={(measurement) => setData((current) => ({ ...current, measurements: [measurement, ...current.measurements] }))}
+          />
+        )}
+        {tab === 'tools' && <ToolsScreen />}
+      </main>
+
+      <nav className="tabbar" aria-label="Primary navigation">
+        {tabs.map((item) => {
+          const Icon = item.icon
+          return (
+            <button key={item.id} type="button" className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)} aria-label={item.label}>
+              <Icon size={20} />
+              <span>{item.label}</span>
+            </button>
+          )
+        })}
+      </nav>
+      {data.recoveryNotice && <div className="toast">{data.recoveryNotice}</div>}
+      {workoutSummary && <AdaptationSummary summary={workoutSummary} onClose={() => setWorkoutSummary(null)} />}
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  )
 }
 
-const EQUIPMENT_BLOCKS = {
-  bands: ['barbell', 'bench press', 'dumbbell', 'machine', 'cable', 'trap bar', 'lat pulldown', 'leg press', 'ski', 'rower'],
-  bodyweight: ['barbell', 'bench press', 'dumbbell', 'machine', 'cable', 'trap bar', 'lat pulldown', 'leg press', 'band', 'ski', 'rower'],
-  dumbbells: ['barbell', 'machine', 'cable', 'trap bar', 'lat pulldown', 'leg press', 'ski', 'rower'],
-  'apartment/minimal': ['barbell', 'machine', 'cable', 'trap bar', 'lat pulldown', 'leg press', 'ski', 'rower', 'sled'],
-  'hotel/travel': ['barbell', 'trap bar', 'sled', 'ski'],
-  'outdoor/track': ['barbell', 'bench press', 'dumbbell', 'machine', 'cable', 'trap bar', 'lat pulldown', 'leg press', 'ski', 'rower'],
+function HomeScreen({ data, stats, onPlan, onImport, onStart }) {
+  const next = data.programs[0]
+  const nextWorkout = next?.weeklyWorkouts?.[next.currentWeek]?.[0] ?? next?.workouts?.[0]
+  const brief = coachBrief(data, stats, next, nextWorkout)
+  const planProof = next ? planProofPoints(next) : [
+    ['1', 'Tell FitMe your goal, event, sport, setup, and limitations.'],
+    ['2', 'Get a week-by-week plan with today already selected.'],
+    ['3', 'Log effort so future sessions can adapt.'],
+  ]
+  return (
+    <section className="screen stack">
+      <div className="hero-band">
+        <div>
+          <p className="eyebrow">Adaptive fitness coach</p>
+          <h1>{next ? 'Today is already planned.' : 'Your plan, built around you.'}</h1>
+          <p className="hero-copy">{next ? 'FitMe is not just a tracker: it adapts training around performance, injuries, sport, event date, and equipment.' : 'Not just a tracker. Answer a few questions and get adaptive training that respects your goal, equipment, schedule, sport, event, and limitations.'}</p>
+        </div>
+        <ShieldCheck size={34} />
+      </div>
+
+      <section className="value-ladder" aria-label="FitMe value steps">
+        {planProof.map(([label, text]) => (
+          <div key={label}>
+            <strong>{label}</strong>
+            <span>{text}</span>
+          </div>
+        ))}
+      </section>
+
+      <section className="coach-brief">
+        <div>
+          <p className="eyebrow">{brief.kicker}</p>
+          <h2>{brief.title}</h2>
+          <p>{brief.body}</p>
+        </div>
+        {brief.action && (
+          <button className="primary" type="button" onClick={brief.action === 'plan' ? onPlan : () => onStart(next, nextWorkout)}>
+            {brief.action === 'plan' ? 'Build Plan' : 'Start'} <ChevronRight size={18} />
+          </button>
+        )}
+      </section>
+
+      <div className="stat-grid">
+        <Metric icon={Flame} label="Streak" value={`${stats.streak}d`} />
+        <Metric icon={Activity} label="7-day activity" value={`${stats.weekSessions}`} />
+        <Metric icon={Dumbbell} label="Volume" value={`${stats.monthVolume.toLocaleString()} lb`} />
+      </div>
+
+      <div className="proof-strip">
+        <span>Performance-based adaptation</span>
+        <span>Injury-aware exercise choices</span>
+        <span>Sport + event specificity</span>
+        <span>Equipment-matched workouts</span>
+      </div>
+
+      <ReminderPanel data={data} stats={stats} program={next} nextWorkout={nextWorkout} />
+
+      {next ? (
+        <article className="card callout">
+          <div>
+            <p className="eyebrow">Next workout</p>
+            <h2>{nextWorkout.title}</h2>
+            {nextWorkout.rationale && <p className="muted">{nextWorkout.rationale}</p>}
+            <p>{next.title} · Week {next.currentWeek}</p>
+          </div>
+          <button className="primary" type="button" onClick={() => onStart(next, nextWorkout)}>
+            Start <ChevronRight size={18} />
+          </button>
+        </article>
+      ) : (
+        <article className="empty-state">
+          <Dumbbell size={42} />
+          <h2>No program yet</h2>
+          <p>Start with a quick plan, then refine it into sport, event, equipment, and injury-aware training.</p>
+          <div className="starter-grid">
+            <span>Train for a marathon</span>
+            <span>Build muscle at home</span>
+            <span>Volleyball off-season</span>
+            <span>Hyrox race prep</span>
+          </div>
+          <DemoPlanGrid />
+          <div className="button-row">
+            <button className="primary" type="button" onClick={onPlan}>
+              Build My Plan
+            </button>
+            <button className="secondary" type="button" onClick={onImport}>
+              Import from Social
+            </button>
+          </div>
+        </article>
+      )}
+
+      <section className="card">
+        <SectionTitle title="Recent PRs" action={`${data.prs.length} total`} />
+        {data.prs.slice(0, 3).map((pr) => (
+          <div className="list-row" key={pr.exerciseName}>
+            <span>{pr.exerciseName}</span>
+            <strong>{pr.weight} x {pr.reps}</strong>
+          </div>
+        ))}
+        {!data.prs.length && <p className="muted">Finish your first workout and FitMe will start surfacing strength wins automatically.</p>}
+      </section>
+
+      <section className="card">
+        <SectionTitle title="Achievements" action={`${data.achievements.length}/5`} />
+        <div className="achievement-grid">
+          {achievementCatalog.map((item) => (
+            <div className={`achievement ${data.achievements.includes(item.id) ? 'done' : ''}`} key={item.id}>
+              <Trophy size={18} />
+              <span>{item.label}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="privacy-strip">
+        <ShieldCheck size={16} />
+        <span>Safety note: FitMe is training guidance, not medical advice. Use clinician guidance for injuries, symptoms, or medical conditions.</span>
+      </section>
+    </section>
+  )
 }
 
-const EQUIPMENT_PREFERENCES = {
-  squat: [
-    { keys: ['hack_squat'], name: 'Hack Squat' },
-    { keys: ['leg_press'], name: 'Leg Press' },
-    { keys: ['barbell_rack', 'rack_barbell', 'squat_stands', 'olympic_barbell'], name: 'Back Squat' },
-    { keys: ['smith_machine'], name: 'Smith Machine Squat' },
-    { keys: ['adjustable_dumbbells', 'fixed_dumbbells', 'dumbbells', 'hotel_dumbbells'], name: 'Goblet Squat' },
-  ],
-  hinge: [
-    { keys: ['trap_bar'], name: 'Trap Bar Deadlift' },
-    { keys: ['barbell_rack', 'rack_barbell', 'olympic_barbell'], name: 'Romanian Deadlift' },
-    { keys: ['kettlebells'], name: 'Kettlebell Swing' },
-    { keys: ['cables'], name: 'Cable Pull-Through' },
-    { keys: ['bands', 'loop_bands', 'long_resistance_band'], name: 'Banded Glute Bridge' },
-  ],
-  push: [
-    { keys: ['barbell_rack', 'rack_barbell', 'olympic_barbell'], name: 'Bench Press' },
-    { keys: ['adjustable_dumbbells', 'fixed_dumbbells', 'dumbbells', 'hotel_dumbbells'], name: 'Incline Dumbbell Press' },
-    { keys: ['chest_press_machine', 'machines', 'selectorized_machines'], name: 'Machine Chest Press' },
-    { keys: ['cables'], name: 'Cable Fly' },
-    { keys: ['machines', 'selectorized_machines'], name: 'Pec Deck' },
-    { keys: ['bench', 'incline_bench'], name: 'Decline Push-Up' },
-    { keys: ['adjustable_dumbbells', 'fixed_dumbbells', 'dumbbells'], name: 'Dumbbell Fly' },
-    { keys: ['landmine'], name: 'Landmine Press' },
-    { keys: ['bands', 'handled_bands'], name: 'Band Chest Press' },
-    { keys: ['bands', 'handled_bands'], name: 'Low-to-High Band Fly' },
-  ],
-  pull: [
-    { keys: ['lat_pulldown'], name: 'Lat Pulldown' },
-    { keys: ['seated_row_machine', 'cables'], name: 'Cable Row' },
-    { keys: ['machines', 'selectorized_machines'], name: 'Seated Machine Row' },
-    { keys: ['cables', 'bands', 'handled_bands'], name: 'Face Pull' },
-    { keys: ['pullup_bar', 'rig'], name: 'Pull-Up' },
-    { keys: ['rings', 'trx', 'suspension_trainer'], name: 'Ring Row' },
-    { keys: ['adjustable_dumbbells', 'fixed_dumbbells', 'dumbbells'], name: 'Single-Arm Dumbbell Row' },
-    { keys: ['bands', 'handled_bands'], name: 'Band Row' },
-  ],
-  overhead: [
-    { keys: ['shoulder_press_machine', 'machines'], name: 'Machine Shoulder Press' },
-    { keys: ['adjustable_dumbbells', 'fixed_dumbbells', 'dumbbells'], name: 'Dumbbell Shoulder Press' },
-    { keys: ['landmine'], name: 'Half-Kneeling Landmine Press' },
-    { keys: ['bands', 'mini_bands', 'handled_bands'], name: 'Band Face Pull' },
-  ],
-  arms: [
-    { keys: ['cables'], name: 'Cable Triceps Pressdown' },
-    { keys: ['ez_bar'], name: 'EZ-Bar Curl' },
-    { keys: ['adjustable_dumbbells', 'fixed_dumbbells', 'dumbbells', 'hotel_dumbbells'], name: 'Dumbbell Curl' },
-    { keys: ['adjustable_dumbbells', 'fixed_dumbbells', 'dumbbells', 'hotel_dumbbells'], name: 'Hammer Curl' },
-    { keys: ['bands', 'handled_bands'], name: 'Band Curl' },
-    { keys: ['bands', 'handled_bands'], name: 'Band Triceps Pressdown' },
-  ],
-  core: [
-    { keys: ['sled'], name: 'Sled Drag' },
-    { keys: ['sandbag'], name: 'Sandbag Bear-Hug Carry' },
-    { keys: ['kettlebells', 'dumbbells', 'adjustable_dumbbells'], name: 'Farmer Carry' },
-    { keys: ['cables'], name: 'Cable Chop' },
-    { keys: ['bands', 'handled_bands'], name: 'Pallof Press' },
-  ],
-  legs: [
-    { keys: ['leg_extension'], name: 'Leg Extension' },
-    { keys: ['hamstring_curl'], name: 'Hamstring Curl' },
-    { keys: ['plyo_box'], name: 'Step-Up' },
-    { keys: ['leg_press'], name: 'Leg Press' },
-    { keys: ['bands', 'mini_bands', 'hip_circle'], name: 'Banded Lateral Walk' },
-  ],
-  cardio: [
-    { keys: ['ski_erg'], name: 'SkiErg Intervals' },
-    { keys: ['rower'], name: 'Rower Intervals' },
-    { keys: ['assault_bike', 'bike'], name: 'Bike Intervals' },
-    { keys: ['treadmill'], name: 'Incline Walk' },
-    { keys: ['track', 'open_space'], name: 'Brisk Walk Intervals' },
-  ],
+function ReminderPanel({ data, stats, program, nextWorkout }) {
+  const reminders = []
+  if (program && nextWorkout) reminders.push(['Next workout ready', `${nextWorkout.title} is queued for week ${program.currentWeek}.`])
+  if (program?.eventDate) reminders.push(['Event countdown', `${inferEventLabel(program)} is ${eventDaysLeft(program.eventDate)} days away.`])
+  if (stats.weekSessions === 0 && data.logs.length) reminders.push(['Streak at risk', 'One short session keeps the training rhythm alive.'])
+  if (program && shouldDeload(program)) reminders.push(['Deload triggered', 'Recent hard feedback suggests reducing volume.'])
+  if (!reminders.length) reminders.push(['Build momentum', 'Generate a plan and FitMe will surface reminders here.'])
+  return (
+    <section className="card reminder-panel">
+      <SectionTitle title="Re-engagement" action="local cues" />
+      {reminders.map(([title, body]) => (
+        <div className="reminder-row" key={title}>
+          <Bell size={16} />
+          <span><strong>{title}</strong><small>{body}</small></span>
+        </div>
+      ))}
+    </section>
+  )
 }
 
-const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000
-
-const parseDateInput = (date) => {
-  if (!date) return null
-  if (date instanceof Date) return Number.isNaN(date.getTime()) ? null : new Date(date)
-  const parts = String(date).split('-').map(Number)
-  if (parts.length === 3 && parts.every(Number.isFinite)) return new Date(parts[0], parts[1] - 1, parts[2])
-  const parsed = new Date(date)
-  return Number.isNaN(parsed.getTime()) ? null : parsed
+function DemoPlanGrid() {
+  const samples = [
+    ['Marathon', 'Date-aware mileage, long runs, taper, strength support'],
+    ['Hyrox', 'Compromised running, sleds, carries, wall balls, station readiness'],
+    ['Volleyball', 'Vertical power, landing mechanics, shoulder durability'],
+    ['Muscle Gain', 'Hypertrophy volume, supersets, equipment-matched splits'],
+    ['Home Gym', 'Rack, dumbbells, bands, treadmill, or minimal setup'],
+    ['Older Adult Strength', 'Balance, mobility, conservative progression, safety cues'],
+  ]
+  return (
+    <div className="demo-grid">
+      {samples.map(([title, body]) => (
+        <div key={title}>
+          <strong>{title}</strong>
+          <span>{body}</span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
-const weeksUntil = (date, now = new Date()) => {
-  const target = parseDateInput(date)
-  if (!target) return null
-  const today = new Date(now)
+function StepHelp({ step, mode }) {
+  const copy = {
+    Goal: 'Not sure? Choose Health and energy. FitMe can still progress strength and conditioning safely.',
+    Goals: 'You can select more than one goal. FitMe blends them instead of forcing a single template.',
+    Profile: 'These details help scale recommendations. Prefer not to share? Keep the default options.',
+    'Sport/Event': 'If your sport is not listed, enter it. Event dates let FitMe build, peak, and taper instead of guessing.',
+    Setup: 'Select what you truly have access to most weeks. Extra notes help with ranges, limits, and shared equipment.',
+    Schedule: 'Not sure? Start with 3-4 days and 45-60 minutes. Consistency beats an ambitious plan you cannot repeat.',
+    Review: 'Check the plan fit before saving. You can regenerate future weeks later if your setup, event, or limitations change.',
+  }
+  return (
+    <div className="helper-note">
+      <Info size={16} />
+      <span>{copy[step] || (mode === 'quick' ? 'Quick Plan uses safe defaults you can refine later.' : 'Answer only what you know; defaults are designed to be safe.')}</span>
+    </div>
+  )
+}
+
+function PlanScreen({ savedProfile, onSave, onSaveWorkout, setToast }) {
+  const [mode, setMode] = useState('quick')
+  const [quick, setQuick] = useState(() => buildQuickDefaults(savedProfile))
+  const [custom, setCustom] = useState(() => buildCustomDefaults(savedProfile))
+  const [socialText, setSocialText] = useState('')
+  const [errors, setErrors] = useState([])
+  const [step, setStep] = useState(0)
+  const current = mode === 'quick' ? quick : custom
+  const sportOptions = [...Object.keys(SPORT_PROFILES), 'other']
+  const sportLabels = { ...Object.fromEntries(Object.entries(SPORT_PROFILES).map(([key, value]) => [key, value.label])), other: 'Sport not listed' }
+  const equipmentAccessOptions = EQUIPMENT_ACCESS_BY_SETUP[current.equipment] ?? EQUIPMENT_ACCESS_BY_SETUP['commercial gym']
+  const wizardSteps = mode === 'quick'
+    ? ['Goal', 'Setup', 'Schedule', 'Review']
+    : ['Profile', 'Goals', 'Sport/Event', 'Setup', 'Schedule', 'Review']
+  const isReview = step === wizardSteps.length - 1
+  const update = (patch) => {
+    setErrors([])
+    return mode === 'quick' ? setQuick((state) => ({ ...state, ...patch })) : setCustom((state) => ({ ...state, ...patch }))
+  }
+  const changeMode = (nextMode) => {
+    setMode(nextMode)
+    setStep(0)
+    setErrors([])
+  }
+  const submitPlan = () => {
+    const validation = validateProfile(current)
+    if (validation.length) {
+      setErrors(validation)
+      return
+    }
+    onSave(current)
+  }
+  const nextStep = () => {
+    const validation = isReview ? validateProfile(current) : stepValidation(current, wizardSteps[step])
+    if (validation.length) {
+      setErrors(validation)
+      return
+    }
+    setErrors([])
+    setStep((value) => Math.min(value + 1, wizardSteps.length - 1))
+  }
+
+  return (
+    <section className="screen stack">
+      <div className="flow-header">
+        <p className="eyebrow">Build the right plan</p>
+        <h1>{mode === 'quick' ? 'Start fast.' : mode === 'custom' ? 'Coach the engine.' : 'Bring a workout in.'}</h1>
+        <p className="hero-copy">
+          {mode === 'quick'
+            ? 'Quick Plan is the lowest-friction path to a useful first week.'
+            : mode === 'custom'
+              ? 'Custom Program gives FitMe the context it needs for goals, sport, events, setup, split, and limitations.'
+              : 'Import a social workout, save it, then run it through the same logging flow.'}
+          </p>
+      </div>
+      <Segmented value={mode} onChange={changeMode} options={[['quick', 'Quick'], ['custom', 'Custom'], ['import', 'Import']]} />
+
+      {mode !== 'import' ? (
+        <>
+          <PlanPreview profile={current} mode={mode} />
+          <form
+            className="card form-stack wizard-card"
+            noValidate
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (isReview) submitPlan()
+              else nextStep()
+            }}
+          >
+            <SectionTitle title={wizardSteps[step]} action={`${step + 1}/${wizardSteps.length}`} />
+            <StepHelp step={wizardSteps[step]} mode={mode} />
+            <div className="progress-track" aria-label="Onboarding progress">
+              {wizardSteps.map((item, index) => (
+                <button key={item} type="button" className={index === step ? 'active' : index < step ? 'done' : ''} onClick={() => setStep(index)}>
+                  {item}
+                </button>
+              ))}
+            </div>
+
+            {mode === 'quick' && step === 0 && <CheckboxGroup label="Goals" values={current.goal} onChange={(goal) => update({ goal })} options={GOAL_OPTIONS} labels={GOAL_LABELS} />}
+            {mode === 'quick' && step === 1 && (
+              <>
+                <Select label="Training setup" value={current.equipment} onChange={(equipment) => update({ equipment, equipmentAccess: defaultEquipmentAccess(equipment) })} options={TRAINING_SETUP_OPTIONS} />
+                <EquipmentAccessGroup values={current.equipmentAccess} onChange={(equipmentAccess) => update({ equipmentAccess })} options={equipmentAccessOptions} />
+                <TextInput label="Additional setup notes" value={current.equipmentDetail} onChange={(equipmentDetail) => update({ equipmentDetail })} placeholder="Dumbbell range, no rack, shared equipment..." maxLength={500} />
+              </>
+            )}
+            {mode === 'quick' && step === 2 && (
+              <>
+                <NumberInput label="Days per week" value={current.days} onChange={(days) => update({ days })} min={2} max={6} />
+                <Select label="Session length" value={current.duration} onChange={(duration) => update({ duration })} options={['15-20 min', '30-40 min', '45-60 min', '60-75 min', '75+ min']} />
+                <Select label="Level" value={current.level} onChange={(level) => update({ level })} options={['beginner', 'intermediate', 'advanced']} />
+                <TextInput label="Limitations or injuries" value={current.limitations} onChange={(limitations) => update({ limitations })} placeholder="Shoulder, knee, back, avoid squats..." maxLength={500} />
+              </>
+            )}
+
+            {mode === 'custom' && step === 0 && (
+              <div className="field-grid">
+                <NumberInput label="Age" value={current.age} onChange={(age) => update({ age })} min={13} max={100} />
+                <Select label="Gender" value={current.gender} onChange={(gender) => update({ gender })} options={['prefer not to say', 'woman', 'man', 'non-binary', 'self-describe']} />
+                <Select label="Body type" value={current.bodyType} onChange={(bodyType) => update({ bodyType })} options={['lean', 'average', 'muscular', 'larger body', 'recomposition focused']} />
+              </div>
+            )}
+            {mode === 'custom' && step === 1 && <CheckboxGroup label="Goals" values={current.goal} onChange={(goal) => update({ goal })} options={GOAL_OPTIONS} labels={GOAL_LABELS} />}
+            {mode === 'custom' && step === 2 && (
+              <>
+                <CheckboxGroup label="Sports" values={current.sport} onChange={(sport) => update({ sport })} options={sportOptions} labels={sportLabels} exclusiveValue="none" />
+                {current.sport.includes('other') && <TextInput label="Sport not listed" value={current.customSport} onChange={(customSport) => update({ customSport })} placeholder="Pickleball, rugby, dance, climbing..." maxLength={60} />}
+                {!current.sport.includes('none') && <TextInput label="Position or context" value={current.sportPosition} onChange={(sportPosition) => update({ sportPosition })} placeholder="Guard, winger, striker, multi-sport..." />}
+                <Select label="Season phase" value={current.seasonPhase} onChange={(seasonPhase) => update({ seasonPhase })} options={['off-season', 'pre-season', 'in-season']} />
+                <Select label="Event" value={current.eventGoal} onChange={(eventGoal) => update({ eventGoal })} options={Object.keys(EVENT_META)} labels={Object.fromEntries(Object.entries(EVENT_META).map(([key, value]) => [key, value.label]))} />
+                {current.eventGoal !== 'none' && <TextInput type="date" label="Event date" value={current.eventDate} onChange={(eventDate) => update({ eventDate })} />}
+              </>
+            )}
+            {mode === 'custom' && step === 3 && (
+              <>
+                <Select label="Training setup" value={current.equipment} onChange={(equipment) => update({ equipment, equipmentAccess: defaultEquipmentAccess(equipment) })} options={TRAINING_SETUP_OPTIONS} />
+                <EquipmentAccessGroup values={current.equipmentAccess} onChange={(equipmentAccess) => update({ equipmentAccess })} options={equipmentAccessOptions} />
+                <TextInput label="Additional setup notes" value={current.equipmentDetail} onChange={(equipmentDetail) => update({ equipmentDetail })} placeholder="Dumbbell range, cable limits, treadmill, no rack, shared equipment..." maxLength={500} />
+              </>
+            )}
+            {mode === 'custom' && step === 4 && (
+              <>
+                <NumberInput label="Days per week" value={current.days} onChange={(days) => update({ days })} min={2} max={6} />
+                <NumberInput label="Exercises per day" value={current.exercisesPerDay} onChange={(exercisesPerDay) => update({ exercisesPerDay })} min={6} max={12} />
+                <CheckboxGroup label="Training split" values={current.split} onChange={(split) => update({ split })} options={TRAINING_SPLIT_OPTIONS} labels={TRAINING_SPLIT_LABELS} />
+                <Select label="Session length" value={current.duration} onChange={(duration) => update({ duration })} options={['15-20 min', '30-40 min', '45-60 min', '60-75 min', '75+ min']} />
+                <Select label="Level" value={current.level} onChange={(level) => update({ level })} options={['beginner', 'intermediate', 'advanced']} />
+                <TextInput label="Limitations or injuries" value={current.limitations} onChange={(limitations) => update({ limitations })} placeholder="Shoulder, knee, back, avoid squats..." maxLength={500} />
+              </>
+            )}
+            {isReview && <PlanReview profile={current} />}
+
+            {errors.length > 0 && <ErrorList errors={errors} />}
+            <div className="wizard-actions">
+              <button className="secondary" type="button" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}>
+                Back
+              </button>
+              <button className="primary" type="submit">
+                {isReview ? <><Save size={18} /> Generate and Auto-save</> : <>Continue <ChevronRight size={18} /></>}
+              </button>
+            </div>
+          </form>
+        </>
+      ) : (
+        <form
+          className="card form-stack"
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!socialText.trim()) {
+              setErrors(['Paste a workout link or description before importing.'])
+              return
+            }
+            const workout = parseSocialWorkout(socialText)
+            onSaveWorkout(workout)
+            setSocialText('')
+            setErrors([])
+            setToast('Imported workout saved')
+          }}
+        >
+          <SectionTitle title="Import from Social" action="local parser" />
+          <label>
+            <span>Link or description</span>
+            <textarea value={socialText} onChange={(event) => { setErrors([]); setSocialText(event.target.value) }} placeholder="Paste a post, URL, or list of movements..." required maxLength={2000} />
+          </label>
+          {errors.length > 0 && <ErrorList errors={errors} />}
+          <button className="primary full" type="submit">
+            <Plus size={18} /> Parse and Save
+          </button>
+          <p className="fine-print">Production hook: send this text to the serverless Anthropic proxy, then validate returned JSON before saving.</p>
+        </form>
+      )}
+    </section>
+  )
+}
+
+function LibraryScreen({ programs, savedWorkouts, selectedProgram, onSelect, onDelete, onDeleteWorkout, onStart, onStartSaved, onAdjust, onRegenerate, onWeekSelect, onSwap }) {
+  const [view, setView] = useState('programs')
+  const [swapTarget, setSwapTarget] = useState(null)
+  const [editTarget, setEditTarget] = useState(null)
+  const [instructionTarget, setInstructionTarget] = useState(null)
+  const week = selectedProgram?.currentWeek ?? 1
+  const sessions = selectedProgram?.weeklyWorkouts?.[week] ?? selectedProgram?.workouts ?? []
+  const researchBasis = selectedProgram ? planResearchBasis(selectedProgram) : []
+
+  return (
+    <section className="screen stack">
+      <Segmented value={view} onChange={setView} options={[['programs', 'Programs'], ['workouts', 'Saved']]} />
+      {view === 'programs' ? (
+        <>
+          <div className="program-list">
+            {programs.map((program) => (
+              <button key={program.id} type="button" className={`program-pill ${selectedProgram?.id === program.id ? 'active' : ''}`} onClick={() => onSelect(program)}>
+                <span>{program.title}</span>
+                <small>Week {program.currentWeek}/{program.trainingPlan?.length ?? 12}</small>
+              </button>
+            ))}
+          </div>
+          {!programs.length && <EmptyMini text="Generated plans auto-save here." />}
+          {selectedProgram && (
+            <article className="card stack">
+              <SectionTitle title={selectedProgram.title} action={selectedProgram.splitType} />
+              <p>{programSummary(selectedProgram)}</p>
+              <ProgramCoachSummary program={selectedProgram} week={week} sessions={sessions} />
+              <PlanProfileSummary program={selectedProgram} />
+              <EventReadinessPanel program={selectedProgram} week={week} sessions={sessions} />
+              <div className="button-row">
+                <button className="secondary" type="button" onClick={() => setEditTarget(selectedProgram)}>
+                  <Edit3 size={16} /> Edit future weeks
+                </button>
+              </div>
+              {selectedProgram.eventDate && <div className="banner subtle">Event date: {selectedProgram.eventDate} · {selectedProgram.trainingPlan.length} week build with taper.</div>}
+              {selectedProgram.eventReadiness === 'compressed' && <div className="banner">Compressed event timeline. Progression is conservative and taper is protected.</div>}
+              {selectedProgram.limitations && <SafetyPanel limitations={selectedProgram.limitations} />}
+              {selectedProgram.weekFeedback?.[week] && <div className="banner subtle">Adapted from feedback: week {week} was marked {selectedProgram.weekFeedback[week]}, so remaining session volume is adjusted transparently.</div>}
+              {researchBasis.length > 0 && (
+                <div className="research-box">
+                  <SectionTitle title="Why this plan" action={`${researchBasis.length} rules`} />
+                  {researchBasis.map((rule) => (
+                    <div className="research-rule" key={rule.label}>
+                      <strong>{rule.label}</strong>
+                      <span>{rule.prescription}</span>
+                      <small>{rule.source}</small>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {shouldDeload(selectedProgram) && <div className="banner">Auto-deload recommended from recent hard feedback.</div>}
+              <GroupedRoadmap program={selectedProgram} activeWeek={week} onWeekSelect={onWeekSelect} />
+              <div className="banner subtle">Showing week {week}: {selectedProgram.trainingPlan[week - 1]?.note}</div>
+              <div className="button-row">
+                {['hard', 'normal', 'easy'].map((feedback) => (
+                  <button key={feedback} className="secondary" type="button" onClick={() => onAdjust(selectedProgram, week, feedback)}>
+                    {feedback === 'hard' ? 'Too Hard' : feedback === 'easy' ? 'Too Easy' : 'Just Right'}
+                  </button>
+                ))}
+              </div>
+              {sessions.map((session) => (
+                <WorkoutCard key={session.title} workout={session} onStart={() => onStart(selectedProgram, session)} onSwap={(exercise) => setSwapTarget({ program: selectedProgram, exercise })} onInstruction={setInstructionTarget} />
+              ))}
+              <button className="danger-link" type="button" onClick={() => window.confirm('Delete this program?') && onDelete(selectedProgram.id)}>
+                <Trash2 size={17} /> Delete program
+              </button>
+            </article>
+          )}
+        </>
+      ) : (
+        <article className="card stack">
+          <SectionTitle title="Saved Workouts" action={`${savedWorkouts.length}`} />
+          {savedWorkouts.map((workout) => (
+            <div className="saved-workout" key={workout.id}>
+              <button type="button" onClick={() => onStartSaved(workout)}>
+                <strong>{workout.title}</strong>
+                <small>{workout.exercises.length} exercises</small>
+              </button>
+              <button className="icon-button" type="button" aria-label={`Delete ${workout.title}`} onClick={() => onDeleteWorkout(workout.id)}>
+                <Trash2 size={17} />
+              </button>
+            </div>
+          ))}
+          {!savedWorkouts.length && <EmptyMini text="Imported social workouts appear here." />}
+        </article>
+      )}
+      {swapTarget && (
+        <SwapDialog
+          target={swapTarget}
+          onClose={() => setSwapTarget(null)}
+          onSave={(replacement, persistent) => {
+            onSwap(swapTarget.program, swapTarget.exercise.name, replacement, persistent)
+            setSwapTarget(null)
+          }}
+        />
+      )}
+      {editTarget && (
+        <ProgramEditDialog
+          program={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSave={(patch) => {
+            onRegenerate(editTarget, patch)
+            setEditTarget(null)
+          }}
+        />
+      )}
+      {instructionTarget && <InstructionDialog exercise={instructionTarget} onClose={() => setInstructionTarget(null)} />}
+    </section>
+  )
+}
+
+function ActiveWorkout({ workout, program, unit, logs, prs, onCancel, onFinish, onSwap }) {
+  const [entries, setEntries] = useState(() => Object.fromEntries(workout.exercises.map((ex) => [ex.id, [{ weight: '', reps: '' }]])))
+  const [effort, setEffort] = useState('just right')
+  const [error, setError] = useState('')
+  const [rest, setRest] = useState(0)
+  const [instructionTarget, setInstructionTarget] = useState(null)
+
+  useEffect(() => {
+    if (!rest) return undefined
+    const timer = setInterval(() => setRest((value) => Math.max(0, value - 1)), 1000)
+    return () => clearInterval(timer)
+  }, [rest])
+
+  const logSet = (exercise, index, patch) => {
+    setEntries((current) => ({
+      ...current,
+      [exercise.id]: current[exercise.id].map((set, setIndex) => (setIndex === index ? { ...set, ...patch } : set)),
+    }))
+  }
+  const addSet = (exercise, seed = { weight: '', reps: '' }) => {
+    setEntries((current) => ({ ...current, [exercise.id]: [...current[exercise.id], seed] }))
+  }
+  const copyPreviousSet = (exercise) => {
+    const previous = entries[exercise.id]?.at(-1) ?? { weight: '', reps: '' }
+    addSet(exercise, { weight: previous.weight, reps: previous.reps })
+  }
+  const copyLastLoggedSet = (exercise) => {
+    const history = exerciseHistory(exercise.name, logs, prs)
+    if (history.lastSet) addSet(exercise, { weight: String(history.lastSet.weight || ''), reps: String(history.lastSet.reps || '') })
+  }
+  const fillPrescribed = (exercise) => {
+    const reps = suggestedReps(exercise.reps)
+    setEntries((current) => ({
+      ...current,
+      [exercise.id]: Array.from({ length: Number(exercise.sets) || 1 }, () => ({ weight: '', reps })),
+    }))
+  }
+  const markPerformanceDone = (exercise) => {
+    setEntries((current) => ({ ...current, [exercise.id]: [{ result: current[exercise.id]?.[0]?.result || 'completed as prescribed' }] }))
+    setRest(exercise.rest)
+  }
+
+  return (
+    <div className="app-shell workout-mode">
+      <header className="app-header">
+        <button className="secondary" type="button" onClick={onCancel}>Close</button>
+        <div className="timer"><Timer size={17} /> {rest}s</div>
+      </header>
+      <main className="screen stack">
+        <div className="hero-band compact">
+          <div>
+            <p className="eyebrow">{program ? `Week ${program.currentWeek}` : 'Saved workout'}</p>
+            <h1>{workout.title}</h1>
+          </div>
+        </div>
+        {workout.exercises.map((exercise) => (
+          <article className="card exercise-log" key={exercise.id}>
+            <SectionTitle title={exercise.name} action={`${exercise.sets} x ${exercise.reps}`} />
+            {exercise.superset && <span className="superset-badge">{exercise.superset}</span>}
+            <ExerciseInstruction exercise={exercise} />
+            <button className="secondary full" type="button" onClick={() => setInstructionTarget(exercise)}>
+              <Info size={16} /> How to do this
+            </button>
+            <ExerciseHistoryPanel history={exerciseHistory(exercise.name, logs, prs)} unit={unit} />
+            <p className="muted">{exercise.notes}</p>
+            <div className="quick-log-row">
+              {!isPerformanceExercise(exercise) && <button className="secondary" type="button" onClick={() => fillPrescribed(exercise)}>Fill prescribed</button>}
+              {!isPerformanceExercise(exercise) && <button className="secondary" type="button" onClick={() => copyLastLoggedSet(exercise)}>Copy last logged</button>}
+              {isPerformanceExercise(exercise) && <button className="secondary" type="button" onClick={() => markPerformanceDone(exercise)}>Mark prescribed</button>}
+            </div>
+            {isPerformanceExercise(exercise) ? (
+              <div className="performance-row">
+                <input aria-label={`${exercise.name} result`} placeholder="time, pace, distance, rounds, notes..." value={entries[exercise.id][0]?.result || ''} onChange={(event) => logSet(exercise, 0, { result: event.target.value })} />
+                <button className="icon-button" type="button" aria-label="Mark result done" onClick={() => setRest(exercise.rest)}>
+                  <Check size={18} />
+                </button>
+              </div>
+            ) : entries[exercise.id].map((set, index) => (
+                <div className="set-row" key={`${exercise.id}-${index}`}>
+                  <span>Set {index + 1}</span>
+                  <input aria-label={`${exercise.name} set ${index + 1} weight`} inputMode="decimal" placeholder={unit} value={set.weight} onChange={(event) => logSet(exercise, index, { weight: event.target.value })} />
+                  <input aria-label={`${exercise.name} set ${index + 1} reps`} inputMode="numeric" placeholder="reps" value={set.reps} onChange={(event) => logSet(exercise, index, { reps: event.target.value })} />
+                  <button className="icon-button" type="button" aria-label="Mark set done" onClick={() => setRest(exercise.rest)}>
+                    <Check size={18} />
+                  </button>
+                </div>
+              ))}
+            <div className="button-row">
+              {!isPerformanceExercise(exercise) && <button className="secondary" type="button" onClick={() => addSet(exercise)}>Add set</button>}
+              {!isPerformanceExercise(exercise) && <button className="secondary" type="button" onClick={() => copyPreviousSet(exercise)}>Copy previous</button>}
+              {program && <button className="secondary" type="button" onClick={() => onSwap(exercise.name, safeExercise(exercise.category || 'core', program, 2), false)}><RefreshCw size={16} /> Quick swap</button>}
+            </div>
+          </article>
+        ))}
+        <label>
+          <span>Readiness / effort</span>
+          <select value={effort} onChange={(event) => setEffort(event.target.value)}>
+            <option>too hard</option>
+            <option>just right</option>
+            <option>too easy</option>
+          </select>
+        </label>
+        {error && <div className="error">{error}</div>}
+        <button
+          className="primary full"
+          type="button"
+          onClick={() => {
+            const logged = workout.exercises.map((exercise) => ({
+              name: exercise.name,
+              sets: isPerformanceExercise(exercise)
+                ? entries[exercise.id].filter((set) => set.result).map((set) => ({ weight: 0, reps: 1, result: set.result }))
+                : entries[exercise.id].filter((set) => set.weight !== '' || set.reps !== '').map((set) => ({ weight: Number(set.weight || 0), reps: Number(set.reps || 0) })),
+            }))
+            const invalid = [...new Set(logged.flatMap((exercise) => exercise.sets.map((set) => validateSet(set.weight, set.reps))).filter(Boolean))]
+            if (invalid.length) {
+              setError(invalid.join(' '))
+              return
+            }
+            setError('')
+            const volume = logged.reduce((total, exercise) => total + exercise.sets.reduce((sum, set) => sum + set.weight * set.reps, 0), 0)
+            onFinish({
+              log: {
+                id: crypto.randomUUID(),
+                workoutId: workout.id,
+                workoutTitle: workout.title,
+                duration: workout.duration ?? 45,
+                volume,
+                unit,
+                effortRating: effort,
+                note: effort === 'too hard' ? 'Recovery tip: reduce next session volume and keep sleep priority high.' : 'Recovery tip: keep protein and hydration steady.',
+                exercisesLogged: logged,
+                date: new Date().toISOString(),
+              },
+            })
+          }}
+        >
+          Finish Workout
+        </button>
+        {instructionTarget && <InstructionDialog exercise={instructionTarget} onClose={() => setInstructionTarget(null)} />}
+      </main>
+    </div>
+  )
+}
+
+function ProgressScreen({ data, stats, onExport, onMeasurement }) {
+  const [field, setField] = useState('weight')
+  const [value, setValue] = useState('')
+  const volumes = data.logs.slice(0, 4).reverse()
+  return (
+    <section className="screen stack">
+      <div className="stat-grid">
+        <Metric icon={Activity} label="Sessions" value={data.logs.length} />
+        <Metric icon={Trophy} label="PRs" value={data.prs.length} />
+        <Metric icon={Flame} label="Streak" value={`${stats.streak}d`} />
+      </div>
+      <article className="coach-card">
+        <p className="eyebrow">Progress insight</p>
+        <h2>{data.logs.length ? 'Your trend is starting to form.' : 'Log one workout to unlock insights.'}</h2>
+        <p>{progressInsight(data, stats)}</p>
+      </article>
+      <ProgressInsightGrid data={data} stats={stats} />
+      <LongRangeAnalytics data={data} />
+      <StrengthBalance data={data} />
+      <EventTrend programs={data.programs} logs={data.logs} />
+      <DeloadHistory programs={data.programs} />
+      <article className="card">
+        <SectionTitle title="4-week Volume" action="logged" />
+        <div className="bar-chart">
+          {volumes.map((log) => (
+            <div key={log.id} className="bar" style={{ height: `${Math.max(8, Math.min(100, log.volume / Math.max(stats.maxVolume, 1) * 100))}%` }}>
+              <span>{Math.round(log.volume)}</span>
+            </div>
+          ))}
+        </div>
+      </article>
+      <article className="card">
+        <SectionTitle title="Activity Heatmap" action="5 weeks" />
+        <div className="heatmap">
+          {Array.from({ length: 35 }, (_, index) => {
+            const date = new Date()
+            date.setDate(date.getDate() - (34 - index))
+            const active = data.logs.some((log) => new Date(log.date).toDateString() === date.toDateString())
+            return <span className={active ? 'hot' : ''} key={date.toISOString()} title={date.toDateString()} />
+          })}
+        </div>
+      </article>
+      <article className="card stack">
+        <SectionTitle title="Body" action={`${data.measurements.length} logs`} />
+        <div className="inline-form">
+          <select value={field} onChange={(event) => setField(event.target.value)} aria-label="Measurement field">
+            {['weight', 'waist', 'chest', 'hips', 'arm', 'thigh', 'body fat'].map((item) => <option key={item}>{item}</option>)}
+          </select>
+          <input inputMode="decimal" placeholder="value" value={value} onChange={(event) => setValue(event.target.value)} aria-label="Measurement value" />
+          <button className="primary" type="button" onClick={() => {
+            const numericValue = Number(value)
+            if (!Number.isFinite(numericValue) || numericValue <= 0 || numericValue > 2000) return
+            onMeasurement({ id: crypto.randomUUID(), field, value: numericValue, loggedAt: new Date().toISOString() })
+            setValue('')
+          }}>Log</button>
+        </div>
+      </article>
+      <article className="card stack">
+        <SectionTitle title="Personal Records" action="est. 1RM" />
+        {data.prs.map((pr) => <div className="list-row" key={pr.exerciseName}><span>{pr.exerciseName}</span><strong>{estimatedOneRepMax(pr.weight, pr.reps)} {pr.unit}</strong></div>)}
+        {!data.prs.length && <p className="muted">PRs unlock from workout logs.</p>}
+      </article>
+      <button className="secondary full" type="button" onClick={onExport}>Export JSON</button>
+    </section>
+  )
+}
+
+function ToolsScreen() {
+  const [weight, setWeight] = useState(185)
+  const [reps, setReps] = useState(5)
+  const [target, setTarget] = useState(225)
+  const plates = calculatePlates(target)
+  return (
+    <section className="screen stack">
+      <article className="card form-stack">
+        <SectionTitle title="1RM Calculator" action="Epley" />
+        <NumberInput label="Weight" value={weight} onChange={setWeight} min={0} max={2000} />
+        <NumberInput label="Reps" value={reps} onChange={setReps} min={1} max={200} />
+        <div className="result">{estimatedOneRepMax(weight, reps)} lb</div>
+      </article>
+      <article className="card form-stack">
+        <SectionTitle title="Plate Calculator" action="45 lb bar" />
+        <NumberInput label="Target weight" value={target} onChange={setTarget} min={45} max={2000} />
+        <div className="plate-row">{plates.map(([plate, count]) => <span key={plate}>{count} x {plate}</span>)}</div>
+      </article>
+      <article className="card">
+        <SectionTitle title="Production Notes" action="MVP" />
+        <p className="fine-print">Supabase Auth, Postgres schema constraints, and the Anthropic proxy are intentionally isolated as deployment work. This local build keeps the deterministic engine offline and persists data in localStorage.</p>
+      </article>
+      <article className="card stack">
+        <SectionTitle title="Launch Readiness" action="QA" />
+        <div className="readiness-list">
+          <span><Check size={15} /> Offline generation fallback</span>
+          <span><Check size={15} /> Persona simulation coverage</span>
+          <span><Check size={15} /> Save recovery and export path</span>
+          <span><Info size={15} /> Production auth, database, AI proxy, and push delivery still require deployment wiring.</span>
+        </div>
+      </article>
+    </section>
+  )
+}
+
+function PlanPreview({ profile, mode }) {
+  const normalized = useMemo(() => normalizeProfile(profile), [profile])
+  const goals = normalized.goal.map((goal) => GOAL_LABELS[goal] ?? goal).join(' + ')
+  const event = EVENT_META[normalized.eventGoal]?.label ?? 'None'
+  const sports = displayProfileSports(normalized)
+  const equipment = (normalized.equipmentAccess || [])
+    .slice(0, 3)
+    .map((item) => EQUIPMENT_ACCESS_LABELS[item] ?? item)
+    .join(', ')
+  const split = (normalized.split || [])
+    .map((item) => TRAINING_SPLIT_LABELS[item] ?? item)
+    .join(', ')
+  const details = [
+    ['Outcome', goals || 'Health and energy'],
+    ['Sport layer', sports || 'General training'],
+    ['Event', normalized.eventGoal === 'none' ? 'None selected' : `${event}${normalized.eventDate ? ` on ${normalized.eventDate}` : ''}`],
+    ['Setup', `${normalized.equipment}${equipment ? ` | ${equipment}` : ''}`],
+    ['Week shape', `${normalized.days} days/week | ${normalized.exercisesPerDay || 6}+ exercises/day`],
+    ['Split', split || 'Adaptive split'],
+  ]
+  return (
+    <aside className="plan-preview card">
+      <SectionTitle title="Plan Preview" action={mode === 'quick' ? 'fast path' : 'live fit'} />
+      <p className="muted">FitMe will turn these answers into a dated, injury-aware, progressive plan and save it automatically.</p>
+      <div className="preview-grid">
+        {details.map(([label, value]) => (
+          <div key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </div>
+        ))}
+      </div>
+    </aside>
+  )
+}
+
+function PlanReview({ profile }) {
+  const normalized = useMemo(() => normalizeProfile(profile), [profile])
+  const validation = validateProfile(normalized)
+  const previewProgram = useMemo(() => (validation.length ? null : buildFallbackProgram(normalized)), [normalized, validation.length])
+  const firstWeek = previewProgram?.weeklyWorkouts?.[1] ?? previewProgram?.workouts ?? []
+  return (
+    <section className="review-panel">
+      <SectionTitle title="Review before saving" action={validation.length ? 'needs attention' : 'ready'} />
+      {validation.length ? (
+        <ErrorList errors={validation} />
+      ) : (
+        <>
+          <div className="review-hero">
+            <div>
+              <p className="eyebrow">Generated preview</p>
+              <h2>{previewProgram.title}</h2>
+              <p>{programSummary(previewProgram)}</p>
+            </div>
+          </div>
+          <div className="review-grid">
+            <div><span>Schedule</span><strong>{normalized.days} days/week</strong></div>
+            <div><span>Plan length</span><strong>{previewProgram.trainingPlan.length} weeks</strong></div>
+            <div><span>Event</span><strong>{normalized.eventGoal === 'none' ? 'None' : `${EVENT_META[normalized.eventGoal]?.label}${normalized.eventDate ? ` on ${normalized.eventDate}` : ''}`}</strong></div>
+            <div><span>Safety</span><strong>{normalized.limitations || 'No limitations listed'}</strong></div>
+          </div>
+          <div className="review-week">
+            <SectionTitle title="First week preview" action={`${firstWeek.length} sessions`} />
+            {firstWeek.slice(0, 4).map((session) => (
+              <div className="list-row compact" key={session.title}>
+                <span>{session.dayLabel}: {session.title}</span>
+                <strong>{session.exercises.length} moves</strong>
+              </div>
+            ))}
+          </div>
+          <div className="trust-grid">
+            <span><ShieldCheck size={15} /> Injury text checked before generation</span>
+            <span><Save size={15} /> Auto-saves to Library</span>
+            <span><RefreshCw size={15} /> Feedback can adapt future sessions</span>
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+function ProgressInsightGrid({ data, stats }) {
+  const hardCount = data.logs.filter((log) => log.effortRating === 'too hard').length
+  const easyCount = data.logs.filter((log) => log.effortRating === 'too easy').length
+  const items = [
+    ['Consistency', stats.weekSessions ? `${stats.weekSessions} this week` : 'needs a session'],
+    ['Volume trend', stats.monthVolume ? `${stats.monthVolume.toLocaleString()} lb in 28d` : 'no volume yet'],
+    ['PR trend', data.prs.length ? `${data.prs.length} lifts tracked` : 'no PR yet'],
+    ['Readiness', hardCount > easyCount ? 'manage fatigue' : easyCount > hardCount ? 'room to progress' : 'steady'],
+  ]
+  return (
+    <section className="insight-grid" aria-label="Progress coaching signals">
+      {items.map(([label, value]) => (
+        <div key={label}>
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </div>
+      ))}
+    </section>
+  )
+}
+
+function LongRangeAnalytics({ data }) {
+  const ranges = [90, 180, 365].map((days) => {
+    const logs = logsWithinDays(data.logs, days)
+    return [`${Math.round(days / 30)} mo`, `${Math.round(logs.reduce((sum, log) => sum + log.volume, 0)).toLocaleString()} lb`, `${logs.length} sessions`]
+  })
+  return (
+    <article className="card">
+      <SectionTitle title="Long-range trend" action="3/6/12 mo" />
+      <div className="analytics-grid">
+        {ranges.map(([label, volume, sessions]) => (
+          <div key={label}><span>{label}</span><strong>{volume}</strong><small>{sessions}</small></div>
+        ))}
+      </div>
+    </article>
+  )
+}
+
+function StrengthBalance({ data }) {
+  const buckets = data.logs.flatMap((log) => log.exercisesLogged || []).reduce((map, exercise) => {
+    const bucket = movementBucket(exercise.name)
+    const volume = exercise.sets.reduce((sum, set) => sum + Number(set.weight || 0) * Number(set.reps || 0), 0)
+    map[bucket] = (map[bucket] || 0) + volume
+    return map
+  }, {})
+  const entries = ['Push', 'Pull', 'Lower', 'Core'].map((label) => [label, Math.round(buckets[label] || 0)])
+  return (
+    <article className="card">
+      <SectionTitle title="Strength balance" action="logged volume" />
+      <div className="analytics-grid">
+        {entries.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value.toLocaleString()} lb</strong></div>)}
+      </div>
+    </article>
+  )
+}
+
+function EventTrend({ programs, logs }) {
+  const eventProgram = programs.find((program) => program.isEventPlan)
+  if (!eventProgram) return null
+  const longRuns = logs.flatMap((log) => log.exercisesLogged || [])
+    .filter((exercise) => /run|bike|swim|row|ski|erg|station|metcon/i.test(exercise.name))
+    .slice(0, 6)
+  const week = eventProgram.currentWeek
+  const phase = eventProgram.trainingPlan?.[week - 1]?.phase || 'Build'
+  return (
+    <article className="card">
+      <SectionTitle title="Event readiness trend" action={inferEventLabel(eventProgram)} />
+      <div className="analytics-grid">
+        <div><span>Current phase</span><strong>{phase}</strong></div>
+        <div><span>Weeks tracked</span><strong>{longRuns.length}</strong></div>
+        <div><span>Event date</span><strong>{eventProgram.eventDate || 'not set'}</strong></div>
+        <div><span>Readiness</span><strong>{eventProgram.eventReadiness || 'standard'}</strong></div>
+      </div>
+    </article>
+  )
+}
+
+function DeloadHistory({ programs }) {
+  const deloads = programs.flatMap((program) => Object.entries(program.weekFeedback || {})
+    .filter(([, value]) => value === 'hard')
+    .map(([week]) => `${program.title}: week ${week}`))
+  return (
+    <article className="card">
+      <SectionTitle title="Deload history" action={`${deloads.length} signals`} />
+      {deloads.slice(0, 4).map((item) => <div className="list-row compact" key={item}><span>{item}</span><strong>hard</strong></div>)}
+      {!deloads.length && <p className="muted">No deload signals yet. Mark weeks too hard to let FitMe protect recovery.</p>}
+    </article>
+  )
+}
+
+function PlanProfileSummary({ program }) {
+  const sportNames = displaySports(program)
+  const splitNames = displaySplits(program)
+  const equipmentNames = displayEquipmentAccess(program)
+  const items = [
+    ['Sport', sportNames || 'General training'],
+    ['Setup', program.equipment || 'commercial gym'],
+    ['Access', equipmentNames || program.equipmentDetail || 'standard equipment'],
+    ['Split', splitNames || 'adaptive split'],
+    ['Volume', `${program.exercisesPerDay || program.workouts?.[0]?.exercises?.length || 6} exercises/day`],
+  ]
+  return (
+    <div className="profile-fit">
+      {items.map(([label, value]) => (
+        <div key={label}>
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ProgramCoachSummary({ program, week, sessions }) {
+  const weekItem = program.trainingPlan?.[week - 1]
+  const nextSession = sessions[0]
+  const eventText = program.isEventPlan
+    ? `${inferEventLabel(program)} prep is in ${weekItem?.phase || 'build'} phase.`
+    : 'This plan balances strength, conditioning, and recovery.'
+  return (
+    <section className="coach-card">
+      <p className="eyebrow">Coach summary</p>
+      <h2>{weekItem ? `Week ${week}: ${weekItem.phase}` : 'Plan ready'}</h2>
+      <p>{eventText} {weekItem?.note || 'Use feedback after each workout so the next week can adjust.'}</p>
+      {nextSession && <small>Next best action: start {nextSession.title}.</small>}
+    </section>
+  )
+}
+
+function EventReadinessPanel({ program, week, sessions }) {
+  if (!program.isEventPlan) return null
+  const eventName = inferEventLabel(program)
+  const longWork = sessions.flatMap((session) => session.exercises).find((exercise) => /long run|brick|simulation|metcon|emom|1 km|threshold/i.test(`${exercise.name} ${exercise.reps}`))
+  const qualityCount = sessions.filter((session) => /quality|interval|metcon|station|brick|simulation|skill|engine/i.test(session.title)).length
+  const weekItem = program.trainingPlan?.[week - 1]
+  const specific = eventSpecificMetrics(program, sessions, week)
+  const items = [
+    ['Event', eventName],
+    ['Week focus', weekItem?.focus || 'event prep'],
+    ['Key session', longWork ? `${longWork.name}: ${longWork.reps}` : sessions[0]?.title || 'session build'],
+    ['Specific days', `${qualityCount}/${sessions.length}`],
+  ]
+  return (
+    <div className="event-dashboard">
+      <SectionTitle title="Event Readiness" action={`Week ${week}`} />
+      <div>
+        {[...items, ...specific].map(([label, value]) => (
+          <div key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function GroupedRoadmap({ program, activeWeek, onWeekSelect }) {
+  const groups = program.trainingPlan.reduce((map, weekItem) => {
+    const key = weekItem.phase
+    if (!map.has(key)) map.set(key, [])
+    map.get(key).push(weekItem)
+    return map
+  }, new Map())
+  return (
+    <div className="roadmap-groups">
+      {[...groups.entries()].map(([phase, weeks]) => (
+        <section key={phase} className="roadmap-group">
+          <div className="roadmap-label">
+            <strong>{phase}</strong>
+            <span>{weeks[0].week}-{weeks.at(-1).week}</span>
+          </div>
+          <div className="roadmap">
+            {weeks.map((weekItem) => (
+              <button
+                className={`week-dot ${weekItem.week === activeWeek ? 'active' : ''}`}
+                style={{ '--phase': weekItem.color }}
+                key={weekItem.week}
+                type="button"
+                onClick={() => onWeekSelect(program, weekItem.week)}
+                aria-label={`Show week ${weekItem.week} ${weekItem.phase} workouts`}
+              >
+                <span>{weekItem.week}</span>
+                <small>{weekItem.phase}</small>
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  )
+}
+
+function SafetyPanel({ limitations }) {
+  const avoided = avoidedForLimitations(limitations)
+  return (
+    <div className="safety-panel">
+      <SectionTitle title="Safety Filter" action="active" />
+      <p>Limitations honored: {limitations}</p>
+      {avoided && <small>Avoiding or scaling: {avoided}</small>}
+    </div>
+  )
+}
+
+function ExerciseInstruction({ exercise }) {
+  return (
+    <div className="instruction-card">
+      <span>{exercise.category || 'movement'}</span>
+      <strong>{formCue(exercise)}</strong>
+      <small>{substitutionCue(exercise)}</small>
+    </div>
+  )
+}
+
+function ExerciseHistoryPanel({ history, unit }) {
+  if (!history.lastSet && !history.best) return <p className="fine-print">No prior history for this movement yet.</p>
+  return (
+    <div className="history-strip">
+      <span>Last: {history.lastSet ? `${history.lastSet.weight} x ${history.lastSet.reps} ${unit}` : 'none'}</span>
+      <span>Best: {history.best ? `${history.best.weight} x ${history.best.reps} (${estimatedOneRepMax(history.best.weight, history.best.reps)} e1RM)` : 'none'}</span>
+      {history.note && <span>Note: {history.note}</span>}
+    </div>
+  )
+}
+
+function WorkoutCard({ workout, onStart, onSwap, onInstruction }) {
+  return (
+    <details className="workout-card" style={{ '--accent-card': workout.accentColor }}>
+      <summary>
+        <span>
+          <strong>{workout.dayLabel}: {workout.title}</strong>
+        <small>{workout.muscleGroups.join(' · ')} · {workout.exercises.length} moves</small>
+        </span>
+        <button className="primary mini" type="button" onClick={(event) => { event.preventDefault(); onStart() }}>
+          Start
+        </button>
+      </summary>
+      {workout.rationale && <p className="session-rationale">{workout.rationale}</p>}
+      {workout.exercises.map((exercise) => (
+        <div className="exercise-preview" key={exercise.id}>
+          <div>
+            <span>{exercise.superset ? `${exercise.superset} · ${exercise.name}` : exercise.name}</span>
+            <small>{exercise.sets} x {exercise.reps}</small>
+          </div>
+          <div className="exercise-preview-actions">
+            <button className="text-button" type="button" onClick={() => onInstruction(exercise)}>Instructions</button>
+            <button className="text-button" type="button" onClick={() => onSwap(exercise)}>Swap</button>
+          </div>
+        </div>
+      ))}
+    </details>
+  )
+}
+
+function InstructionDialog({ exercise, onClose }) {
+  const [status, setStatus] = useState('loading')
+  const [instruction, setInstruction] = useState(null)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        const nextInstruction = getExerciseInstruction(exercise)
+        setInstruction(nextInstruction)
+        setStatus(nextInstruction.status === 'empty' ? 'empty' : 'ready')
+      } catch {
+        setInstruction(null)
+        setStatus('error')
+      }
+    }, 120)
+
+    return () => window.clearTimeout(timer)
+  }, [exercise])
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section className="dialog card stack instruction-dialog" role="dialog" aria-modal="true" aria-label={`${exercise?.name || 'Exercise'} instructions`}>
+        <SectionTitle title="Instructions" action={exercise?.category || 'movement'} />
+        {status === 'loading' && <EmptyMini text="Loading exercise instructions..." />}
+        {status === 'empty' && <EmptyMini text={instruction?.message || 'No exercise selected.'} />}
+        {status === 'error' && <div className="error">Instructions could not load. Close this panel and try again.</div>}
+        {status === 'ready' && instruction && (
+          <>
+            <div className="instruction-hero">
+              <p className="eyebrow">Exercise</p>
+              <h2>{instruction.name}</h2>
+              {instruction.isDefault && <small>Safe default guidance based on this movement type.</small>}
+            </div>
+            <InstructionMedia media={instruction.media} exerciseName={instruction.name} />
+            <div className="instruction-meta">
+              <div>
+                <span>Primary muscles</span>
+                <strong>{instruction.primaryMuscles.join(', ')}</strong>
+              </div>
+              <div>
+                <span>Equipment</span>
+                <strong>{instruction.equipment}</strong>
+              </div>
+            </div>
+            <InstructionBlock title="Starting position" items={[instruction.startingPosition]} />
+            <InstructionBlock title="How to do it" items={instruction.steps} ordered />
+            <InstructionBlock title="Breathing" items={[instruction.breathing]} />
+            <InstructionBlock title="Common mistakes" items={instruction.mistakes} />
+            <InstructionBlock title="Safety tips" items={instruction.safety} />
+            <InstructionBlock title="Modification" items={instruction.modifications} />
+            <div className="safety-callout">
+              <ShieldCheck size={17} />
+              <span>{instruction.stopGuidance}</span>
+            </div>
+          </>
+        )}
+        <button className="primary full" type="button" onClick={onClose}>Back to workout</button>
+      </section>
+    </div>
+  )
+}
+
+function InstructionMedia({ media, exerciseName }) {
+  if (!media?.src || media.type === 'placeholder') {
+    return (
+      <div className="instruction-media instruction-media-placeholder">
+        <div className="demo-icon"><Dumbbell size={30} /></div>
+        <div>
+          <p className="eyebrow">Video demo slot</p>
+          <strong>Demo coming soon</strong>
+          <span>{media?.label || `${exerciseName} demo coming soon`}</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (media.type === 'video') {
+    return (
+      <figure className="instruction-media">
+        <video src={media.src} poster={media.poster} aria-label={media.label || `${exerciseName} demonstration`} muted loop playsInline controls preload="metadata" />
+        <figcaption>{media.label || 'Short movement demo'}</figcaption>
+      </figure>
+    )
+  }
+
+  return (
+    <figure className="instruction-media">
+      <img src={media.src} alt={media.label || `${exerciseName} demonstration`} loading="lazy" />
+      <figcaption>{media.type === 'placeholder' ? 'Video demo slot ready' : media.label || 'Movement demo'}</figcaption>
+    </figure>
+  )
+}
+
+function InstructionBlock({ title, items, ordered = false }) {
+  const List = ordered ? 'ol' : 'ul'
+  return (
+    <section className="instruction-block">
+      <h3>{title}</h3>
+      <List>
+        {items.map((item) => <li key={item}>{item}</li>)}
+      </List>
+    </section>
+  )
+}
+
+function SwapDialog({ target, onSave, onClose }) {
+  const [replacement, setReplacement] = useState(safeExercise(target.exercise.category || 'core', target.program, 3, target.program.excludedExercises))
+  const [persistent, setPersistent] = useState(true)
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <form className="dialog card" onSubmit={(event) => { event.preventDefault(); onSave(replacement, persistent) }}>
+        <SectionTitle title="Swap exercise" action={target.exercise.name} />
+        <TextInput label="Replacement" value={replacement} onChange={setReplacement} />
+        <label className="check-row"><input type="checkbox" checked={persistent} onChange={(event) => setPersistent(event.target.checked)} /> Exclude original for this program</label>
+        <div className="button-row">
+          <button className="secondary" type="button" onClick={onClose}>Cancel</button>
+          <button className="primary" type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function ProgramEditDialog({ program, onSave, onClose }) {
+  const [draft, setDraft] = useState(() => profileFromProgram(program))
+  const equipmentAccessOptions = EQUIPMENT_ACCESS_BY_SETUP[draft.equipment] ?? EQUIPMENT_ACCESS_BY_SETUP['commercial gym']
+  const update = (patch) => setDraft((state) => ({ ...state, ...patch }))
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <form
+        className="dialog card form-stack"
+        onSubmit={(event) => {
+          event.preventDefault()
+          onSave(normalizeProfile(draft))
+        }}
+      >
+        <SectionTitle title="Edit future weeks" action={`from week ${program.currentWeek}`} />
+        <p className="fine-print">Past weeks stay intact. FitMe regenerates this week onward with the new setup, schedule, event, and limitations.</p>
+        <CheckboxGroup label="Goals" values={draft.goal} onChange={(goal) => update({ goal })} options={GOAL_OPTIONS} labels={GOAL_LABELS} />
+        <Select label="Event" value={draft.eventGoal} onChange={(eventGoal) => update({ eventGoal })} options={Object.keys(EVENT_META)} labels={Object.fromEntries(Object.entries(EVENT_META).map(([key, value]) => [key, value.label]))} />
+        {draft.eventGoal !== 'none' && <TextInput type="date" label="Event date" value={draft.eventDate} onChange={(eventDate) => update({ eventDate })} />}
+        <Select label="Training setup" value={draft.equipment} onChange={(equipment) => update({ equipment, equipmentAccess: defaultEquipmentAccess(equipment) })} options={TRAINING_SETUP_OPTIONS} />
+        <EquipmentAccessGroup values={draft.equipmentAccess} onChange={(equipmentAccess) => update({ equipmentAccess })} options={equipmentAccessOptions} />
+        <div className="field-grid">
+          <NumberInput label="Days per week" value={draft.days} onChange={(days) => update({ days })} min={2} max={6} />
+          <NumberInput label="Exercises per day" value={draft.exercisesPerDay} onChange={(exercisesPerDay) => update({ exercisesPerDay })} min={6} max={12} />
+        </div>
+        <TextInput label="Limitations or injuries" value={draft.limitations} onChange={(limitations) => update({ limitations })} placeholder="Shoulder, knee, back, avoid squats..." maxLength={500} />
+        <div className="button-row">
+          <button className="secondary" type="button" onClick={onClose}>Cancel</button>
+          <button className="primary" type="submit">Regenerate future weeks</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function AdaptationSummary({ summary, onClose }) {
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section className="dialog card stack" role="dialog" aria-modal="true" aria-label="Workout adaptation summary">
+        <SectionTitle title="What FitMe Learned" action={summary.effort} />
+        <div className="coach-card">
+          <p className="eyebrow">Next adjustment</p>
+          <h2>{summary.headline}</h2>
+          <p>{summary.body}</p>
+        </div>
+        <div className="preview-grid">
+          {summary.metrics.map(([label, value]) => (
+            <div key={label}>
+              <span>{label}</span>
+              <strong>{value}</strong>
+            </div>
+          ))}
+        </div>
+        <p className="fine-print">{summary.tip}</p>
+        <button className="primary full" type="button" onClick={onClose}>Back to Home</button>
+      </section>
+    </div>
+  )
+}
+
+function Metric({ icon: Icon, label, value }) {
+  return <div className="metric"><Icon size={19} /><span>{label}</span><strong>{value}</strong></div>
+}
+
+function SectionTitle({ title, action }) {
+  return <div className="section-title"><h2>{title}</h2><span>{action}</span></div>
+}
+
+function Segmented({ value, onChange, options }) {
+  return <div className="segmented">{options.map(([id, label]) => <button key={id} type="button" className={value === id ? 'active' : ''} onClick={() => onChange(id)}>{label}</button>)}</div>
+}
+
+function Select({ label, value, onChange, options, labels = {} }) {
+  return <label><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option value={option} key={option}>{labels[option] ?? option}</option>)}</select></label>
+}
+
+function CheckboxGroup({ label, values, onChange, options, labels = {}, exclusiveValue }) {
+  const selected = Array.isArray(values) ? values : values ? [values] : []
+  const toggle = (option) => {
+    if (exclusiveValue && option === exclusiveValue) {
+      onChange([exclusiveValue])
+      return
+    }
+    const withoutExclusive = selected.filter((item) => item !== exclusiveValue)
+    const next = withoutExclusive.includes(option)
+      ? withoutExclusive.filter((item) => item !== option)
+      : [...withoutExclusive, option]
+    onChange(next.length ? next : exclusiveValue ? [exclusiveValue] : [options[0]])
+  }
+  return (
+    <fieldset className="check-group">
+      <legend>{label}</legend>
+      <div>
+        {options.map((option) => (
+          <label className="check-chip" key={option}>
+            <input type="checkbox" checked={selected.includes(option)} onChange={() => toggle(option)} />
+            <span>{labels[option] ?? option}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  )
+}
+
+function EquipmentAccessGroup({ values, onChange, options }) {
+  return (
+    <div className="field-with-action">
+      <div className="field-action-row">
+        <span>Equipment access</span>
+        <button className="text-button" type="button" onClick={() => onChange([...options])}>
+          Select all
+        </button>
+      </div>
+      <CheckboxGroup label="Equipment access" values={values} onChange={onChange} options={options} labels={EQUIPMENT_ACCESS_LABELS} />
+    </div>
+  )
+}
+
+function TextInput({ label, value, onChange, placeholder = '', type = 'text', maxLength }) {
+  return <label><span>{label}</span><input type={type} value={value} placeholder={placeholder} maxLength={maxLength} onChange={(event) => onChange(event.target.value)} /></label>
+}
+
+function NumberInput({ label, value, onChange, min, max }) {
+  return <label><span>{label}</span><input type="number" min={min} max={max} value={value} onChange={(event) => onChange(event.target.value === '' ? '' : Number(event.target.value))} /></label>
+}
+
+function EmptyMini({ text }) {
+  return <div className="empty-mini">{text}</div>
+}
+
+function ErrorList({ errors }) {
+  return (
+    <div className="error" role="alert">
+      {errors.map((item) => (
+        <p key={item}>{item}</p>
+      ))}
+    </div>
+  )
+}
+
+const achievementCatalog = [
+  { id: 'first_program', label: 'First plan' },
+  { id: 'first_log', label: 'First log' },
+  { id: 'three_sessions', label: '3 sessions' },
+  { id: 'first_pr', label: 'First PR' },
+  { id: 'volume_10k', label: '10k volume' },
+]
+
+function unlockAchievements(data) {
+  const unlocked = new Set(data.achievements)
+  if (data.programs.length) unlocked.add('first_program')
+  if (data.logs.length) unlocked.add('first_log')
+  if (data.logs.length >= 3) unlocked.add('three_sessions')
+  if (data.prs.length) unlocked.add('first_pr')
+  if (data.logs.reduce((sum, log) => sum + log.volume, 0) >= 10000) unlocked.add('volume_10k')
+  return [...unlocked]
+}
+
+function computeStats(data) {
+  const now = Date.now()
+  const weekSessions = data.logs.filter((log) => now - new Date(log.date).getTime() < 7 * 86400000).length
+  const monthLogs = data.logs.filter((log) => now - new Date(log.date).getTime() < 28 * 86400000)
+  const monthVolume = Math.round(monthLogs.reduce((sum, log) => sum + log.volume, 0))
+  const maxVolume = Math.max(...data.logs.map((log) => log.volume), 1)
+  const days = new Set(data.logs.map((log) => new Date(log.date).toDateString()))
+  let streak = 0
+  for (let offset = 0; offset < 365; offset += 1) {
+    const date = new Date()
+    date.setDate(date.getDate() - offset)
+    if (days.has(date.toDateString())) streak += 1
+    else if (offset > 0) break
+  }
+  return { weekSessions, monthVolume, maxVolume, streak }
+}
+
+function progressInsight(data, stats) {
+  if (!data.logs.length) return 'Finish a session and FitMe will begin tracking volume, PRs, streaks, and adaptation signals.'
+  if (stats.weekSessions === 0) return 'No sessions are logged this week yet. Start the next planned workout to keep the program calibrated.'
+  if (stats.weekSessions >= 3) return 'You have enough recent activity for meaningful feedback. Keep logging effort so deload and progression decisions stay grounded.'
+  return 'A few more logged sessions will make trends clearer. Prioritize completion and accurate effort ratings before chasing volume.'
+}
+
+function logsWithinDays(logs, days) {
+  const cutoff = Date.now() - days * 86400000
+  return logs.filter((log) => new Date(log.date).getTime() >= cutoff)
+}
+
+function eventDaysLeft(eventDate) {
+  const target = new Date(eventDate)
+  if (Number.isNaN(target.getTime())) return '?'
+  const today = new Date()
   today.setHours(0, 0, 0, 0)
   target.setHours(0, 0, 0, 0)
-  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())
-  const targetUtc = Date.UTC(target.getFullYear(), target.getMonth(), target.getDate())
-  const exactWeeks = (targetUtc - todayUtc) / MS_PER_WEEK
-  const roundedWeeks = Math.round(exactWeeks)
-  return Math.max(0, Math.abs(exactWeeks - roundedWeeks) < 0.001 ? roundedWeeks : Math.ceil(exactWeeks))
+  return Math.max(0, Math.ceil((target.getTime() - today.getTime()) / 86400000))
 }
 
-export const eventPlanMeta = (profile, now = new Date()) => {
-  const event = EVENT_META[profile.eventGoal || 'none']
-  const hasEvent = Boolean(profile.eventGoal && profile.eventGoal !== 'none')
-  const weeksToEvent = hasEvent ? weeksUntil(profile.eventDate, now) : null
-  const minWeeks = profile.eventGoal === 'marathon' ? 16 : profile.eventGoal === 'half' || profile.eventGoal === 'triathlon' ? 12 : 8
-  const planWeeks = hasEvent && weeksToEvent ? Math.max(4, Math.min(weeksToEvent, 32)) : 12
-  let readiness = 'standard'
-  if (hasEvent && weeksToEvent !== null && weeksToEvent < 4) readiness = 'too-soon'
-  else if (hasEvent && weeksToEvent !== null && weeksToEvent < minWeeks) readiness = 'compressed'
+function movementBucket(name = '') {
+  const lower = name.toLowerCase()
+  if (/bench|press|push|thruster/.test(lower)) return 'Push'
+  if (/row|pull|pulldown|ski/.test(lower)) return 'Pull'
+  if (/squat|deadlift|lunge|leg|sled|step|run|bike/.test(lower)) return 'Lower'
+  return 'Core'
+}
+
+function buildWorkoutSummary(log, program) {
+  const completedSets = log.exercisesLogged.reduce((sum, exercise) => sum + exercise.sets.length, 0)
+  const effort = log.effortRating
+  const isHard = effort === 'too hard'
+  const isEasy = effort === 'too easy'
+  const headline = isHard ? 'Recovery gets priority next.' : isEasy ? 'Progression is available.' : 'This was the right training dose.'
+  const body = isHard
+    ? 'FitMe will treat this as a fatigue signal. Keep the next session conservative and prioritize sleep, food, hydration, and joint feedback.'
+    : isEasy
+      ? 'FitMe will treat this as a readiness signal. If the next session also feels easy, the plan can tolerate more load, volume, or pace demand.'
+      : 'FitMe will keep the plan steady. Consistent just-right sessions are the best signal for sustainable progression.'
+  const event = program?.isEventPlan ? inferEventLabel(program) : 'General'
   return {
-    event,
-    hasEvent,
-    weeksToEvent,
-    minWeeks,
-    planWeeks,
-    readiness,
-    eventDate: profile.eventDate || '',
+    effort,
+    headline,
+    body,
+    tip: log.note || 'Recovery tip: keep hydration, protein, and sleep steady.',
+    metrics: [
+      ['Session', log.workoutTitle],
+      ['Event layer', event],
+      ['Logged sets', completedSets],
+      ['Volume', `${Math.round(log.volume).toLocaleString()} ${log.unit}`],
+    ],
   }
 }
 
-const phaseForWeek = (week) => {
-  if (week <= 3) return { name: 'Base', color: '#60A5FA', intensity: 0.9, volume: 1 }
-  if (week === 4) return { name: 'Deload', color: '#22C55E', intensity: 0.75, volume: 0.65 }
-  if (week <= 7) return { name: 'Build', color: '#A78BFA', intensity: 1, volume: 1.1 }
-  if (week === 8) return { name: 'Deload', color: '#22C55E', intensity: 0.78, volume: 0.7 }
-  if (week <= 11) return { name: 'Peak', color: '#F472B6', intensity: 1.08, volume: 0.9 }
-  return { name: 'Test', color: '#FB923C', intensity: 0.95, volume: 0.6 }
-}
-
-const eventPhaseForWeek = (week, totalWeeks) => {
-  if (week === totalWeeks) return { name: 'Race', color: '#C8FF00', intensity: 0.35, volume: 0.25 }
-  if (week >= totalWeeks - 1) return { name: 'Taper', color: '#22C55E', intensity: 0.6, volume: 0.5 }
-  if (week >= Math.max(1, totalWeeks - 4)) return { name: 'Peak', color: '#F472B6', intensity: 1.05, volume: 0.95 }
-  if (week <= Math.ceil(totalWeeks * 0.35)) return { name: 'Base', color: '#60A5FA', intensity: 0.85, volume: 0.9 }
-  return { name: 'Build', color: '#A78BFA', intensity: 0.95, volume: 1.05 }
-}
-
-const unsafeForLimitations = (name, limitations = '') => {
-  const lower = limitations.toLowerCase()
-  const exerciseName = name.toLowerCase()
-  const injuryBlocked = Object.entries(LIMITATION_RULES).some(([key, blocked]) => {
-    return lower.includes(key) && blocked.some((term) => exerciseName.includes(term))
-  })
-  const explicitAvoid = Object.entries(AVOID_KEYWORDS).some(([word, blocked]) => {
-    return lower.includes(`avoid ${word}`) && blocked.some((term) => exerciseName.includes(term))
-  })
-  return injuryBlocked || explicitAvoid
-}
-
-const equipmentText = (profile) => `${profile.equipment || ''} ${asArray(profile.equipmentAccess).join(' ')} ${profile.equipmentDetail || ''}`.toLowerCase()
-
-const hasEquipment = (profile, keys) => {
-  const text = equipmentText(profile)
-  return keys.some((key) => text.includes(key.replaceAll('_', ' ')) || text.includes(key.toLowerCase()))
-}
-
-const unavailableForEquipment = (name, profile = {}) => {
-  const lowerEquipment = typeof profile === 'string' ? profile.toLowerCase() : (profile.equipment || '').toLowerCase()
-  const exerciseName = name.toLowerCase()
-  const blocked = Object.entries(EQUIPMENT_BLOCKS).find(([key]) => lowerEquipment.includes(key))?.[1] ?? []
-  return blocked.some((term) => exerciseName.includes(term))
-}
-
-const preferredEquipmentExercise = (category, profile, shift = 0, excluded = []) => {
-  const preferences = EQUIPMENT_PREFERENCES[category] ?? []
-  const available = preferences.filter((item) => hasEquipment(profile, item.keys))
-  if (!available.length) return null
-  const blocked = new Set(excluded.map((name) => name.toLowerCase()))
-  for (let index = 0; index < available.length; index += 1) {
-    const candidate = available[(index + shift) % available.length].name
-    if (!blocked.has(candidate.toLowerCase()) && !unsafeForLimitations(candidate, profile.limitations) && !unavailableForEquipment(candidate, profile)) return candidate
-  }
-  return null
-}
-
-const fallbackExercise = (category, profile) => {
-  const lower = (profile.limitations || '').toLowerCase()
-  if (category === 'cardio') return lower.includes('knee') || lower.includes('obesity') ? 'Low-Impact Bike' : 'Brisk Walk Intervals'
-  if (category === 'squat' || category === 'legs') return lower.includes('knee') ? 'Seated Hamstring Curl' : 'Sit-to-Stand'
-  if (category === 'push' || category === 'overhead') return lower.includes('shoulder') || lower.includes('rotator') ? 'Isometric Wall Press' : 'Incline Push-Up'
-  if (category === 'pull') return lower.includes('shoulder') || lower.includes('rotator') ? 'Band Row to Ribs' : 'Band Row'
-  if (category === 'hinge') return lower.includes('back') ? 'Glute Bridge' : 'Hip Hinge Drill'
-  if (category === 'balance') return 'Supported Single-Leg Balance'
-  return 'Dead Bug'
-}
-
-const profileFlags = (profile) => {
-  const text = `${profile.limitations || ''} ${profile.goal || ''} ${profile.focus || ''}`.toLowerCase()
-  const age = Number(profile.age)
+function exerciseHistory(name, logs, prs) {
+  const normalized = name.toLowerCase()
+  const entries = logs
+    .flatMap((log) => (log.exercisesLogged || [])
+      .filter((exercise) => exercise.name?.toLowerCase() === normalized)
+      .flatMap((exercise) => exercise.sets.map((set) => ({ ...set, note: log.note, date: log.date }))))
+    .filter((set) => Number.isFinite(Number(set.weight)) && Number.isFinite(Number(set.reps)) && Number(set.reps) > 0)
+  const lastSet = entries[0]
+  const best = entries.reduce((bestSet, set) => {
+    if (!bestSet) return set
+    return estimatedOneRepMax(Number(set.weight), Number(set.reps)) > estimatedOneRepMax(Number(bestSet.weight), Number(bestSet.reps)) ? set : bestSet
+  }, null)
+  const pr = prs.find((item) => item.exerciseName?.toLowerCase() === normalized)
   return {
-    beginner: profile.level === 'beginner',
-    olderAdult: Number.isFinite(age) && age >= 60,
-    teen: Number.isFinite(age) && age < 18,
-    shortSession: /15|20/.test(profile.duration || ''),
-    medicalRisk: ['hypertension', 'diabetes', 'obesity', 'sedentary', 'arthritis'].some((term) => text.includes(term)),
-    inSeason: profile.seasonPhase === 'in-season',
-    powerGoal: String(profile.goal || '').includes('power') || String(profile.goal || '').includes('sport_power'),
-    healthGoal: String(profile.goal || '').includes('health') || String(profile.goal || '').includes('fat_loss') || String(profile.goal || '').includes('independence'),
+    lastSet,
+    best: pr || best,
+    note: lastSet?.note,
   }
 }
 
-const goalText = (profile) => (Array.isArray(profile.goal) ? profile.goal.join(' ') : profile.goal || '')
-
-const researchTagsForProfile = (profile) => {
-  const flags = profileFlags(profile)
-  const goal = goalText(profile)
-  const tags = new Set()
-  if (goal.includes('health') || goal.includes('fat_loss') || goal.includes('independence')) tags.add('health')
-  if (goal.includes('strength')) tags.add('strength')
-  if (goal.includes('muscle')) tags.add('hypertrophy')
-  if (goal.includes('endurance') || (profile.eventGoal && profile.eventGoal !== 'none')) tags.add('enduranceEvent')
-  if (goal.includes('power') || goal.includes('sport_power')) tags.add('powerSport')
-  if (flags.olderAdult) tags.add('olderAdult')
-  if (flags.medicalRisk || flags.beginner) tags.add('chronicCondition')
-  return [...tags]
+function formCue(exercise) {
+  const name = exercise.name.toLowerCase()
+  if (/squat|leg press|wall ball|thruster/.test(name)) return 'Brace first, knees track over toes, keep reps smooth.'
+  if (/deadlift|hinge|swing|pull-through/.test(name)) return 'Hips move back, spine stays long, finish with glutes.'
+  if (/press|push-up/.test(name)) return 'Ribs down, shoulder blades controlled, stop before painful range.'
+  if (/row|pull-up|pulldown|ski/.test(name)) return 'Lead with elbows, keep neck relaxed, pause with control.'
+  if (/run|bike|rower|erg|walk/.test(name)) return 'Start easier than you think; finish able to repeat the effort.'
+  if (/carry|sled|sandbag/.test(name)) return 'Brace, breathe behind the shield, and keep steps deliberate.'
+  return 'Use controlled reps, full-body tension, and stop if pain changes your mechanics.'
 }
 
-export const safeExercise = (category, profile, shift = 0, excluded = []) => {
-  if (category === 'cardio' && /knee|obesity|arthritis|sedentary/i.test(profile.limitations || '')) return 'Low-Impact Bike'
-  const preferred = preferredEquipmentExercise(category, profile, shift, excluded)
-  if (preferred) return preferred
-  const pool = EX_POOL[category] ?? EX_POOL.core
-  const blocked = new Set(excluded.map((name) => name.toLowerCase()))
-  for (let index = 0; index < pool.length; index += 1) {
-    const candidate = pool[(index + shift) % pool.length]
-    if (!blocked.has(candidate.toLowerCase()) && !unsafeForLimitations(candidate, profile.limitations) && !unavailableForEquipment(candidate, profile)) {
-      return candidate
-    }
+function substitutionCue(exercise) {
+  const category = exercise.category || 'movement'
+  return `Swap for pain, missing equipment, or poor fit. FitMe will keep the replacement in the ${category} pattern.`
+}
+
+function eventSpecificMetrics(program, sessions, week) {
+  const key = program.eventGoal || inferEventGoal(program)
+  const allText = sessions.flatMap((session) => session.exercises.map((exercise) => `${exercise.name} ${exercise.reps}`)).join(' ')
+  const weeksLeft = Math.max(0, (program.trainingPlan?.length ?? week) - week)
+  if (['5k', '10k', 'half', 'marathon'].includes(key)) {
+    const longest = [...allText.matchAll(/(\d+(?:\.\d+)?)\s*(?:mi|miles)/gi)].map((match) => Number(match[1])).sort((a, b) => b - a)[0]
+    return [
+      ['Run focus', key === 'marathon' ? 'long-run durability' : EVENT_META[key]?.focus || 'pace control'],
+      ['Longest run', longest ? `${longest} mi` : 'not listed'],
+      ['Weeks left', weeksLeft],
+      ['Taper', weeksLeft <= 2 ? 'active soon' : 'protected'],
+    ]
   }
-  return fallbackExercise(category, profile)
-}
-
-const safeUniqueExercise = (category, profile, shift = 0, excluded = [], used = new Set()) => {
-  const usedNames = [...used]
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    const candidate = safeExercise(category, profile, shift + attempt, [...excluded, ...usedNames])
-    if (!used.has(candidate)) return candidate
+  if (key === 'triathlon') {
+    return [
+      ['Swim/Bike/Run', `${/swim/i.test(allText) ? 'S' : '-'}${/bike/i.test(allText) ? 'B' : '-'}${/run/i.test(allText) ? 'R' : '-'}`],
+      ['Brick exposure', /brick/i.test(allText) ? 'included' : 'upcoming'],
+      ['Weeks left', weeksLeft],
+      ['Taper', weeksLeft <= 2 ? 'active soon' : 'protected'],
+    ]
   }
-  return safeExercise(category, profile, shift, excluded)
+  if (key === 'hyrox') {
+    return [
+      ['Station work', /sled|farmer|wall ball|ski|row/i.test(allText) ? 'included' : 'upcoming'],
+      ['Compromised run', /1 km|run/i.test(allText) ? 'included' : 'upcoming'],
+      ['Simulation', /simulation/i.test(allText) ? 'this week' : 'building'],
+      ['Weeks left', weeksLeft],
+    ]
+  }
+  if (key === 'crossfit') {
+    return [
+      ['Skill work', /skill|emom/i.test(allText) ? 'included' : 'upcoming'],
+      ['Metcon', /metcon|amrap|rounds/i.test(allText) ? 'included' : 'building'],
+      ['Strength touch', /squat|press|deadlift|pull/i.test(allText) ? 'included' : 'upcoming'],
+      ['Weeks left', weeksLeft],
+    ]
+  }
+  return [['Weeks left', weeksLeft]]
 }
 
-export const validateProfile = (profile) => {
+function suggestedReps(reps) {
+  const match = String(reps).match(/\d+/)
+  return match ? match[0] : '8'
+}
+
+function stepValidation(profile, stepName) {
   const errors = []
-  if (profile.age !== undefined && profile.age !== '' && (Number(profile.age) < 13 || Number(profile.age) > 100)) {
-    errors.push('Age must be between 13 and 100.')
+  if (stepName === 'Profile') {
+    if (profile.age !== '' && (Number(profile.age) < 13 || Number(profile.age) > 100)) errors.push('Age must be between 13 and 100.')
   }
-  if (asArray(profile.sport).includes('other') && !(profile.customSport || profile.sportOther || '').trim()) {
-    errors.push('Enter the sport that is not listed.')
+  if (stepName === 'Goal' || stepName === 'Goals') {
+    if (!asUiArray(profile.goal).length) errors.push('Select at least one goal.')
   }
-  if (!Number.isFinite(Number(profile.days)) || Number(profile.days) < 2 || Number(profile.days) > 6) {
-    errors.push('Training days must be between 2 and 6.')
+  if (stepName === 'Sport/Event') {
+    if (asUiArray(profile.sport).includes('other') && !profile.customSport?.trim()) errors.push('Enter the sport that is not listed.')
+    if (profile.eventGoal && profile.eventGoal !== 'none' && !profile.eventDate) errors.push('Choose the event date so the plan can taper correctly.')
   }
-  if (profile.exercisesPerDay !== undefined && profile.exercisesPerDay !== '' && (Number(profile.exercisesPerDay) < 6 || Number(profile.exercisesPerDay) > 12)) {
-    errors.push('Exercises per day must be between 6 and 12.')
+  if (stepName === 'Setup') {
+    if (!profile.equipment) errors.push('Choose a training setup.')
+    if (!asUiArray(profile.equipmentAccess).length) errors.push('Select at least one equipment option.')
   }
-  if ((profile.limitations || '').length > 500) {
-    errors.push('Limitations must be 500 characters or less.')
-  }
-  if (profile.duration === '5 min/week') {
-    errors.push('Five minutes per week is below the minimum effective dose. Choose 15-20 min and start with two short sessions.')
-  }
-  if (profile.eventDate) {
-    const eventDate = parseDateInput(profile.eventDate)
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    if (!eventDate || eventDate < today) {
-      errors.push('Event date must be today or later.')
-    }
-  }
-  const meta = eventPlanMeta(profile)
-  if (meta.hasEvent && !profile.eventDate) {
-    errors.push('Event date is required for event-specific plans.')
-  }
-  if (meta.hasEvent && meta.readiness === 'too-soon') {
-    errors.push(`${meta.event.label} is less than 4 weeks away. Choose a later event or generate a maintenance plan.`)
+  if (stepName === 'Schedule') {
+    if (Number(profile.days) < 2 || Number(profile.days) > 6) errors.push('Training days must be between 2 and 6.')
+    if (profile.exercisesPerDay !== undefined && (Number(profile.exercisesPerDay) < 6 || Number(profile.exercisesPerDay) > 12)) errors.push('Exercises per day must be between 6 and 12.')
+    if (profile.limitations && profile.limitations.length > 500) errors.push('Limitations must be 500 characters or less.')
   }
   return errors
 }
 
-export const normalizeProfile = (profile) => ({
-  ...profile,
-  goal: asArray(profile.goal).length ? asArray(profile.goal) : ['health'],
-  sport: selectedSports(profile).length ? selectedSports(profile) : ['none'],
-  customSport: (profile.customSport || profile.sportOther || '').trim().slice(0, 60),
-  age: profile.age === undefined || profile.age === '' ? undefined : Number(profile.age),
-  gender: profile.gender || 'prefer not to say',
-  bodyType: profile.bodyType || 'average',
-  days: Math.max(2, Math.min(Number(profile.days) || 4, profile.seasonPhase === 'in-season' || Number(profile.age) < 18 ? 4 : 6)),
-  exercisesPerDay: Math.max(6, Math.min(Number(profile.exercisesPerDay) || 6, 12)),
-  split: asArray(profile.split).length ? asArray(profile.split) : ['upper_lower'],
-  equipmentAccess: asArray(profile.equipmentAccess).slice(0, 24),
-  equipmentDetail: (profile.equipmentDetail || '').trim().slice(0, 500),
-  limitations: (profile.limitations || '').trim().slice(0, 500),
-})
+function asUiArray(value) {
+  return Array.isArray(value) ? value.filter(Boolean) : value ? [value] : []
+}
 
-export const programSignature = (profile) => {
-  const clean = normalizeProfile(profile)
+function coachBrief(data, stats, next, nextWorkout) {
+  if (!next) {
+    return {
+      kicker: 'First win',
+      title: 'Get a plan before motivation cools off.',
+      body: 'Quick Plan gets you moving fast; Custom Program adds the deeper sport, event, split, equipment, and limitation details.',
+      action: 'plan',
+    }
+  }
+  if (!data.logs.length) {
+    return {
+      kicker: 'Activation',
+      title: 'Your first logged session unlocks feedback.',
+      body: `${nextWorkout?.title || 'Today'} is ready. Finish it once and FitMe starts tracking PRs, streaks, and adaptation signals.`,
+      action: 'start',
+    }
+  }
+  if (shouldDeload(next)) {
+    return {
+      kicker: 'Recovery signal',
+      title: 'Back off before progress stalls.',
+      body: 'Recent hard feedback points to a deload. FitMe is already lowering the cost of staying consistent.',
+      action: 'start',
+    }
+  }
+  if (stats.weekSessions === 0) {
+    return {
+      kicker: 'Streak at risk',
+      title: 'One session restarts momentum.',
+      body: `${nextWorkout?.title || 'Your next workout'} is the shortest path back into rhythm.`,
+      action: 'start',
+    }
+  }
+  return {
+    kicker: 'Today’s brief',
+    title: nextWorkout?.title || 'Next session ready',
+    body: nextWorkout?.rationale || 'Follow the next planned session and log effort so the program can keep adapting.',
+    action: 'start',
+  }
+}
+
+function planProofPoints(program) {
+  const weeks = program.trainingPlan?.length ?? 12
+  const currentPhase = program.trainingPlan?.[program.currentWeek - 1]?.phase || 'Adaptive'
   return [
-    Array.isArray(clean.goal) ? clean.goal.join('+') : clean.goal,
-    asArray(clean.sport).join('+'),
-    clean.customSport.toLowerCase(),
-    clean.eventGoal,
-    clean.equipment,
-    asArray(clean.equipmentAccess).join('+').toLowerCase(),
-    clean.equipmentDetail.toLowerCase(),
-    clean.days,
-    clean.duration,
-    asArray(clean.split).join('+'),
-    clean.exercisesPerDay,
-    clean.level,
-    clean.limitations.toLowerCase(),
-  ].join('|')
-}
-
-const repScheme = (profile, week) => {
-  const phase = phaseForWeek(week)
-  const goal = goalText(profile)
-  const flags = profileFlags(profile)
-  let scheme = { sets: 3, reps: '6-10', rest: 120 }
-  if (goal.includes('strength')) scheme = phase.name === 'Peak' && !flags.medicalRisk ? { sets: 4, reps: '3-5', rest: 180 } : { sets: 4, reps: '5-8', rest: 150 }
-  if (goal.includes('muscle')) scheme = { sets: phase.name === 'Deload' ? 2 : 3, reps: '8-12', rest: 90 }
-  if (goal.includes('endurance') || goal.includes('fat_loss') || goal.includes('health')) scheme = { sets: 2, reps: '10-15', rest: 60 }
-  if (goal.includes('power') || goal.includes('sport_power')) scheme = { sets: flags.inSeason ? 2 : 3, reps: '3-6 fast', rest: 120 }
-  if (goal.includes('independence')) scheme = { sets: 2, reps: '8-12 controlled', rest: 75 }
-  if (flags.beginner || flags.olderAdult || flags.medicalRisk || flags.shortSession) {
-    scheme = { ...scheme, sets: Math.max(1, scheme.sets - 1), rest: Math.min(scheme.rest, 90) }
-  }
-  return scheme
-}
-
-const goalFlags = (profile) => {
-  const goal = goalText(profile)
-  return {
-    strength: goal.includes('strength'),
-    muscle: goal.includes('muscle'),
-    endurance: goal.includes('endurance'),
-    fatLoss: goal.includes('fat_loss'),
-    health: goal.includes('health'),
-    power: goal.includes('power') || goal.includes('sport_power'),
-    independence: goal.includes('independence'),
-  }
-}
-
-const exercise = (name, scheme, notes = '', category = 'general', logType = 'sets') => ({
-  id: id('ex'),
-  name,
-  category,
-  logType,
-  sets: scheme.sets,
-  reps: scheme.reps,
-  rest: scheme.rest,
-  notes,
-})
-
-const eventExercise = (name, prescription, notes = '', category = 'event') => exercise(name, { sets: prescription.sets ?? 1, reps: prescription.reps, rest: prescription.rest ?? 0 }, notes, category, prescription.logType ?? 'performance')
-
-export const sessionDurationLimit = (duration = '') => {
-  if (/15|20/.test(duration)) return 20
-  if (/30|40/.test(duration)) return 40
-  if (/60/.test(duration)) return 60
-  return 50
-}
-
-const minutesFromRepText = (reps = '') => {
-  const text = String(reps).toLowerCase()
-  const range = text.match(/(\d+)\s*-\s*(\d+)\s*min/)
-  if (range) return Number(range[2])
-  const single = text.match(/(\d+)\s*min/)
-  if (single) return Number(single[1])
-  return null
-}
-
-export const estimateWorkoutMinutes = (workout) => Math.ceil((workout.exercises || []).reduce((total, item) => {
-  const repMinutes = minutesFromRepText(item.reps)
-  if (repMinutes !== null) return total + repMinutes + 1
-  const sets = Math.max(1, Number(item.sets) || 1)
-  const rest = Math.max(0, Number(item.rest) || 0)
-  const workMinutes = /sec/.test(String(item.reps).toLowerCase()) ? 0.75 : 0.65
-  return total + (sets * workMinutes) + (Math.max(0, sets - 1) * rest / 60) + 0.75
-}, 0))
-
-const fitWorkoutToDuration = (items, profile, preserveFirst = 2) => {
-  const limit = sessionDurationLimit(profile.duration)
-  let fitted = items
-  const estimate = () => estimateWorkoutMinutes({ exercises: fitted })
-  const compress = (predicate, update) => {
-    if (estimate() <= limit) return
-    fitted = fitted.map((item, index) => (index >= preserveFirst && predicate(item) ? update(item) : item))
-  }
-
-  compress(
-    (item) => !['cardio', 'mobility', 'balance'].includes(item.category) && Number(item.sets) > 2,
-    (item) => ({ ...item, sets: Math.max(2, Number(item.sets) - 1), rest: Math.min(Number(item.rest) || 60, 90) }),
-  )
-  compress(
-    (item) => !['cardio', 'mobility', 'balance'].includes(item.category) && Number(item.rest) > 75,
-    (item) => ({ ...item, rest: 75 }),
-  )
-  compress(
-    (item) => item.category === 'cardio' && minutesFromRepText(item.reps) !== null,
-    (item) => ({ ...item, reps: profileFlags(profile).shortSession ? '6-8 min' : '8-12 min' }),
-  )
-  compress(
-    (item) => item.category === 'cardio' && minutesFromRepText(item.reps) !== null,
-    (item) => ({ ...item, reps: profileFlags(profile).shortSession ? '5-6 min' : '6-8 min' }),
-  )
-  if (estimate() > limit) {
-    fitted = fitted.map((item, index) => (index >= preserveFirst && !['cardio', 'mobility', 'balance'].includes(item.category)
-      ? { ...item, sets: Math.min(Number(item.sets) || 2, 2), rest: Math.min(Number(item.rest) || 60, 60) }
-      : item))
-  }
-  if (estimate() > limit) {
-    fitted = fitted.map((item) => (item.category === 'cardio' && minutesFromRepText(item.reps) !== null
-      ? { ...item, reps: profileFlags(profile).shortSession ? '5-6 min' : '6-8 min' }
-      : item))
-  }
-  return fitted
-}
-
-const equipmentStation = (profile, station) => {
-  const choices = {
-    ski: [
-      { keys: ['ski_erg'], name: 'SkiErg' },
-      { keys: ['bands', 'handled_bands', 'long_resistance_band'], name: 'Band Ski Pull' },
-      { keys: ['cables'], name: 'Cable Ski Pull' },
-    ],
-    sledPush: [
-      { keys: ['sled'], name: 'Sled Push' },
-      { keys: ['treadmill'], name: 'Treadmill Push' },
-      { keys: ['weighted_vest'], name: 'Weighted Vest March' },
-    ],
-    sledPull: [
-      { keys: ['sled'], name: 'Sled Pull' },
-      { keys: ['sandbag'], name: 'Sandbag Drag' },
-      { keys: ['cables'], name: 'Heavy Cable Row Drag' },
-    ],
-    wallBall: [
-      { keys: ['wall_ball', 'medicine_balls'], name: 'Wall Ball' },
-      { keys: ['dumbbells', 'adjustable_dumbbells', 'fixed_dumbbells'], name: 'Dumbbell Thruster' },
-      { keys: ['kettlebells'], name: 'Kettlebell Thruster' },
-    ],
-    erg: [
-      { keys: ['rower'], name: 'Rower' },
-      { keys: ['ski_erg'], name: 'SkiErg' },
-      { keys: ['assault_bike', 'bike'], name: 'BikeErg / Bike' },
-      { keys: ['treadmill', 'track'], name: 'Run' },
-    ],
-    carry: [
-      { keys: ['sandbag'], name: 'Sandbag Carry' },
-      { keys: ['kettlebells', 'dumbbells', 'adjustable_dumbbells'], name: 'Farmer Carry' },
-      { keys: ['weighted_vest'], name: 'Weighted Vest Carry' },
-    ],
-    gymnastics: [
-      { keys: ['rings'], name: 'Ring Skill Practice' },
-      { keys: ['pullup_bar', 'rig'], name: 'Pull-Up Skill Practice' },
-      { keys: ['trx', 'suspension_trainer'], name: 'Suspension Row Skill Practice' },
-    ],
-    power: [
-      { keys: ['bumper_plates', 'olympic_barbell'], name: 'Olympic Lift Technique' },
-      { keys: ['dumbbells', 'adjustable_dumbbells'], name: 'Dumbbell Power Complex' },
-      { keys: ['kettlebells'], name: 'Kettlebell Power Complex' },
-    ],
-    bike: [
-      { keys: ['assault_bike'], name: 'Assault Bike' },
-      { keys: ['bike'], name: 'Bike' },
-      { keys: ['treadmill'], name: 'Treadmill Incline Ride Substitute' },
-    ],
-  }
-  return choices[station]?.find((choice) => hasEquipment(profile, choice.keys))?.name
-}
-
-const sessionRationale = (title, focus, eventLabel = '') => {
-  if (/Quality Run/i.test(title)) return 'Build race-specific speed and threshold control while keeping the rest of the week recoverable.'
-  if (/Easy Run/i.test(title)) return 'Accumulate aerobic volume and supportive strength without adding excessive fatigue.'
-  if (/Long Run/i.test(title)) return 'Extend event durability, pacing discipline, and fueling practice.'
-  if (/Swim/i.test(title)) return 'Improve swim efficiency and shoulder durability so race-day effort costs less.'
-  if (/Bike/i.test(title)) return 'Build bike power and cadence control without compromising run quality.'
-  if (/Brick/i.test(title)) return 'Practice the bike-to-run transition so the first minutes off the bike feel controlled.'
-  if (/Hyrox|Station|Run \+ Station|Simulation/i.test(title)) return 'Rehearse compromised running and station transitions under manageable fatigue.'
-  if (/Metcon|EMOM|Strength \+ Skill/i.test(title)) return 'Blend skill, strength, and repeatable conditioning without turning every day into a max test.'
-  return eventLabel ? `Support ${eventLabel} preparation with ${focus}.` : `Build ${focus} while matching your goal, equipment, and limitations.`
-}
-
-const preferredSplit = (profile, day) => {
-  const splits = asArray(profile.split)
-  if (splits.includes('push_pull_legs')) return ['Push', 'Pull', 'Legs', 'Athletic'][day % 4]
-  if (splits.includes('body_part')) return ['Chest + Back', 'Legs', 'Shoulders + Arms', 'Conditioning + Core'][day % 4]
-  return ['Upper', 'Lower'][day % 2]
-}
-
-const eventSessionTemplate = (profile, day, week, excluded = []) => {
-  const eventKey = profile.eventGoal || 'none'
-  if (!['marathon', 'half', '10k', '5k', 'triathlon', 'hyrox', 'crossfit'].includes(eventKey)) return null
-  const meta = eventPlanMeta(profile)
-  const weekPlan = buildTrainingPlan(profile)[week - 1]
-  const phase = meta.hasEvent ? eventPhaseForWeek(week, meta.planWeeks) : phaseForWeek(week)
-  const flags = profileFlags(profile)
-  const targetExercises = Math.max(6, Math.min(Number(profile.exercisesPerDay) || 6, 12))
-  const longRun = weekPlan?.longRun ?? EVENT_META[eventKey]?.longRun ?? 4
-  const taper = phase.name === 'Taper' || phase.name === 'Race'
-  const easyCardio = safeExercise('cardio', profile, week + day, excluded)
-  const buildNote = `${phase.name} week. ${weekPlan?.note ?? 'Progress event-specific capacity without burying recovery.'} ${evidenceCue(profile)}`
-  const strengthSupport = [
-    eventExercise(safeExercise('hinge', profile, week + day, excluded), { sets: taper ? 2 : 3, reps: taper ? '6 easy' : '6-8', rest: 105 }, `Strength support for event durability. ${buildNote}`),
-    eventExercise(safeExercise('legs', profile, week + day + 1, excluded), { sets: taper ? 2 : 3, reps: '8-12', rest: 75 }, `Single-leg and posterior-chain durability. ${buildNote}`),
-    eventExercise(safeExercise(flags.olderAdult ? 'balance' : 'core', profile, day, excluded), { sets: 2, reps: flags.olderAdult ? '30 sec' : '10-14', rest: 45 }, `Trunk control for efficient event movement. ${buildNote}`),
-    eventExercise(safeExercise('mobility', profile, day, excluded), { sets: 2, reps: '45-60 sec', rest: 20 }, `Restore range and downshift. ${buildNote}`),
+    [`${weeks}w`, `${currentPhase} block with week ${program.currentWeek} selected.`],
+    ['Safe', program.limitations ? `Filtering around: ${program.limitations}` : 'Exercise swaps and exclusions stay with the plan.'],
+    ['Coach', 'Feedback can reshape the remaining sessions.'],
   ]
-
-  const byEvent = {
-    marathon: [
-      {
-        title: 'Quality Run',
-        muscleGroups: ['Run Speed', 'Threshold', 'Core'],
-        accentColor: '#60A5FA',
-        exercises: [
-          eventExercise('Easy Run Warm-Up', { reps: taper ? '8-10 min' : '10-15 min' }, `Prepare for quality running. ${buildNote}`, 'cardio'),
-          eventExercise('Tempo Intervals', { sets: taper ? 3 : 5, reps: taper ? '3 min @ controlled tempo' : '5 min @ threshold effort', rest: 120 }, `Runna-style quality day: controlled pace, not a race. ${buildNote}`, 'cardio'),
-          eventExercise('Strides', { sets: taper ? 4 : 6, reps: '20 sec fast / relaxed', rest: 60 }, `Fast but smooth leg turnover. ${buildNote}`, 'cardio'),
-          ...strengthSupport.slice(1),
-        ],
-      },
-      {
-        title: 'Easy Run + Strength',
-        muscleGroups: ['Aerobic Base', 'Strength'],
-        accentColor: '#C8FF00',
-        exercises: [
-          eventExercise(easyCardio, { reps: taper ? '15-25 min easy' : '30-45 min Zone 2' }, `Aerobic base without stress accumulation. ${buildNote}`, 'cardio'),
-          ...strengthSupport,
-        ],
-      },
-      {
-        title: 'Long Run',
-        muscleGroups: ['Aerobic Durability', 'Fueling'],
-        accentColor: '#F472B6',
-        exercises: [
-          eventExercise('Long Run', { reps: taper ? `${Math.max(4, Math.round(longRun * 0.6))} mi easy` : `${longRun} mi progressive easy` }, `Practice fueling, pacing, and relaxed form. ${buildNote}`, 'cardio'),
-          eventExercise('Post-Run Walkdown', { reps: '5-10 min' }, `Downshift heart rate before mobility. ${buildNote}`, 'mobility'),
-          ...strengthSupport.slice(2),
-        ],
-      },
-    ],
-    half: null,
-    '10k': null,
-    '5k': null,
-    triathlon: [
-      {
-        title: 'Swim Technique',
-        muscleGroups: ['Swim', 'Shoulders', 'Core'],
-        accentColor: '#60A5FA',
-        exercises: [
-          eventExercise('Swim Drill Set', { sets: taper ? 4 : 6, reps: '50 m technique', rest: 30 }, `Balance catch, body position, and calm breathing. ${buildNote}`, 'cardio'),
-          eventExercise('Steady Swim', { reps: taper ? '400-800 m easy' : '800-1600 m aerobic' }, `Triathlon-specific low-impact aerobic work. ${buildNote}`, 'cardio'),
-          eventExercise(safeExercise('pull', profile, week, excluded), { sets: taper ? 2 : 3, reps: '8-12', rest: 75, logType: 'sets' }, `Lat and upper-back support for swim mechanics. ${buildNote}`, 'pull'),
-          ...strengthSupport.slice(2),
-        ],
-      },
-      {
-        title: 'Bike Intervals',
-        muscleGroups: ['Bike Power', 'Threshold'],
-        accentColor: '#A78BFA',
-        exercises: [
-          eventExercise('Bike Warm-Up', { reps: '10 min easy spin' }, `Build cadence before work. ${buildNote}`, 'cardio'),
-          eventExercise(`${equipmentStation(profile, 'bike') || 'Bike'} Threshold Repeats`, { sets: taper ? 3 : 5, reps: taper ? '3 min firm' : '6 min firm', rest: 120 }, `Build bike power without compromising the run. ${buildNote}`, 'cardio'),
-          eventExercise('High-Cadence Spin-Ups', { sets: 5, reps: '30 sec fast feet', rest: 45 }, `Cadence skill and neuromuscular sharpness. ${buildNote}`, 'cardio'),
-          ...strengthSupport.slice(1),
-        ],
-      },
-      {
-        title: 'Brick Session',
-        muscleGroups: ['Bike', 'Run', 'Transition'],
-        accentColor: '#FB923C',
-        exercises: [
-          eventExercise('Steady Bike', { reps: taper ? '25-40 min easy' : '45-75 min aerobic' }, `Practice race-position rhythm. ${buildNote}`, 'cardio'),
-          eventExercise('Transition Run', { reps: taper ? '8-12 min easy' : '15-25 min controlled' }, `Run off the bike with short, quick cadence. ${buildNote}`, 'cardio'),
-          eventExercise('Transition Practice', { sets: 4, reps: 'smooth mount / shoes / first minute', rest: 60 }, `Make race execution automatic. ${buildNote}`, 'mobility'),
-          ...strengthSupport.slice(2),
-        ],
-      },
-      {
-        title: 'Tri Strength',
-        muscleGroups: ['Durability', 'Core'],
-        accentColor: '#C8FF00',
-        exercises: strengthSupport,
-      },
-    ],
-    hyrox: [
-      {
-        title: 'Run + Station Intervals',
-        muscleGroups: ['Compromised Running', 'Stations'],
-        accentColor: '#C8FF00',
-        exercises: [
-          eventExercise('1 km Run Repeats', { sets: taper ? 3 : 5, reps: 'controlled race pace', rest: 90 }, `Roxfit-style compromised running dose. ${buildNote}`, 'cardio'),
-          eventExercise(equipmentStation(profile, 'ski') || 'Band Ski Pull', { sets: taper ? 2 : 4, reps: '500 m or 2 min', rest: 75 }, `Station-specific pulling capacity matched to available equipment. ${buildNote}`, 'cardio'),
-          eventExercise(equipmentStation(profile, 'sledPush') || 'Heavy March', { sets: taper ? 2 : 4, reps: '20-30 m', rest: 90 }, `Station-specific drive matched to available equipment. ${buildNote}`, 'legs'),
-          eventExercise(equipmentStation(profile, 'sledPull') || 'Heavy Row Drag', { sets: taper ? 2 : 4, reps: '20-30 m', rest: 90 }, `Posterior-chain station strength matched to available equipment. ${buildNote}`, 'hinge'),
-          eventExercise('Burpee Broad Jump / Step Burpee', { sets: taper ? 2 : 3, reps: '8-12', rest: 75 }, `Scale impact for knees or wrists. ${buildNote}`, 'cardio'),
-          eventExercise(equipmentStation(profile, 'wallBall') || 'Bodyweight Squat to Reach', { sets: taper ? 2 : 4, reps: '12-20', rest: 75 }, `Finish strong under fatigue with selected equipment. ${buildNote}`, 'squat'),
-        ],
-      },
-      {
-        title: 'Station Strength',
-        muscleGroups: ['Sled', 'Carries', 'Lunges'],
-        accentColor: '#A78BFA',
-        exercises: [
-          eventExercise(safeExercise('squat', profile, week, excluded), { sets: taper ? 2 : 4, reps: '5-8', rest: 120, logType: 'sets' }, `Leg strength for sleds and lunges. ${buildNote}`, 'squat'),
-          eventExercise('Farmer Carry', { sets: taper ? 2 : 4, reps: '40-60 m', rest: 75 }, `Grip and trunk stiffness for carry stations. ${buildNote}`, 'core'),
-          eventExercise('Walking Lunge / Reverse Lunge', { sets: taper ? 2 : 3, reps: '12-20 steps', rest: 90 }, `Lunge station capacity. ${buildNote}`, 'legs'),
-          ...strengthSupport.slice(1),
-        ],
-      },
-      {
-        title: 'Hyrox Simulation',
-        muscleGroups: ['Race Rehearsal', 'Engine'],
-        accentColor: '#F472B6',
-        exercises: [
-          eventExercise('Compromised Run Blocks', { sets: taper ? 3 : 6, reps: '500 m run + station', rest: 90 }, `Rehearse switching from running to work. ${buildNote}`, 'cardio'),
-          eventExercise(equipmentStation(profile, 'erg') || 'Run', { sets: taper ? 2 : 4, reps: '500 m or 2 min', rest: 75 }, `Station engine without excessive impact. ${buildNote}`, 'cardio'),
-          eventExercise(equipmentStation(profile, 'carry') || 'Bear-Hug Carry', { sets: taper ? 2 : 4, reps: '40-80 m', rest: 75 }, `Race-specific bracing and breathing. ${buildNote}`, 'core'),
-          ...strengthSupport.slice(2),
-        ],
-      },
-    ],
-    crossfit: [
-      {
-        title: 'Strength + Skill',
-        muscleGroups: ['Strength', 'Gymnastics'],
-        accentColor: '#C8FF00',
-        exercises: [
-          eventExercise(safeExercise('squat', profile, week, excluded), { sets: taper ? 3 : 5, reps: taper ? '3 easy' : '3-5', rest: 150, logType: 'sets' }, `Build the strength base before intensity. ${buildNote}`, 'squat'),
-          eventExercise(equipmentStation(profile, 'gymnastics') || 'Bodyweight Skill Practice', { sets: taper ? 3 : 6, reps: 'quality sets, stop before failure', rest: 60 }, `Gymnastics skill matched to selected equipment. ${buildNote}`, 'pull'),
-          eventExercise(equipmentStation(profile, 'power') || 'Jump and Landing Power Complex', { sets: taper ? 3 : 5, reps: '2-3 crisp reps', rest: 90 }, `Technique under control before speed. ${buildNote}`, 'power'),
-          ...strengthSupport.slice(2),
-        ],
-      },
-      {
-        title: 'Mixed Modal Metcon',
-        muscleGroups: ['Metcon', 'Power', 'Engine'],
-        accentColor: '#FB923C',
-        exercises: [
-          eventExercise('AMRAP Mixed Modal Block', { sets: 1, reps: taper ? '8-10 min smooth' : '12-18 min hard sustainable' }, `CrossFit-style mixed modal work without maxing every day. ${buildNote}`, 'cardio'),
-          eventExercise(`${equipmentStation(profile, 'erg') || 'Run'} Calories`, { sets: taper ? 3 : 5, reps: 'moderate calories', rest: 45 }, `Monostructural engine dose. ${buildNote}`, 'cardio'),
-          eventExercise(equipmentStation(profile, 'power') || 'Dumbbell Cycling', { sets: taper ? 3 : 5, reps: '8-12 unbroken quality reps', rest: 60 }, `Cycling mechanics and breathing matched to equipment. ${buildNote}`, 'power'),
-          eventExercise('Burpee / Step-Down Burpee', { sets: taper ? 2 : 4, reps: '8-12', rest: 60 }, `Gym capacity with scalable impact. ${buildNote}`, 'cardio'),
-          ...strengthSupport.slice(2),
-        ],
-      },
-      {
-        title: 'Engine EMOM',
-        muscleGroups: ['Engine', 'Repeatability'],
-        accentColor: '#60A5FA',
-        exercises: [
-          eventExercise('EMOM Engine', { sets: 1, reps: taper ? '10 min alternating easy stations' : '16-24 min alternating stations' }, `Practice repeatable output and transitions. ${buildNote}`, 'cardio'),
-          eventExercise(equipmentStation(profile, 'carry') || equipmentStation(profile, 'sledPush') || 'Loaded Carry Substitute', { sets: taper ? 3 : 5, reps: '30-45 sec', rest: 30 }, `Loaded conditioning without technical breakdown. ${buildNote}`, 'core'),
-          eventExercise('Midline Density', { sets: taper ? 2 : 4, reps: '30-45 sec', rest: 30 }, `Brace under breathing pressure. ${buildNote}`, 'core'),
-          ...strengthSupport.slice(2),
-        ],
-      },
-    ],
-  }
-
-  byEvent.half = byEvent.marathon
-  byEvent['10k'] = byEvent.marathon
-  byEvent['5k'] = byEvent.marathon
-
-  const sessions = byEvent[eventKey]
-  if (!sessions) return null
-  const session = sessions[day % sessions.length]
-  const fillCategories = ['core', 'mobility', 'balance', 'pull', 'hinge']
-  const filled = [...session.exercises]
-  while (filled.length < targetExercises) {
-    const category = fillCategories[filled.length % fillCategories.length]
-    filled.push(eventExercise(safeExercise(category, profile, week + filled.length, excluded), { ...schemeForCategory(category, profile, repScheme(profile, week), flags, EVENT_META[eventKey], weekPlan, week), logType: 'sets' }, `Support work for ${EVENT_META[eventKey].label}. ${buildNote}`, category))
-  }
-  return {
-    ...session,
-    dayLabel: `Day ${day + 1}`,
-    rationale: sessionRationale(session.title, EVENT_META[eventKey].focus, EVENT_META[eventKey].label),
-    duration: flags.shortSession ? 20 : eventKey === 'hyrox' || eventKey === 'crossfit' ? 55 : 60,
-    exercises: applySupersets(filled.slice(0, targetExercises), profile),
-  }
 }
 
-const insertWithinWorkout = (categories, category, targetExercises) => {
-  if (categories.includes(category)) return categories
-  const next = [...categories]
-  next.splice(Math.max(0, Math.min(targetExercises - 1, next.length)), 0, category)
-  return next
-}
-
-const categoriesForSplit = (split, profile, day, targetExercises = 6) => {
-  const flags = profileFlags(profile)
-  const eventActive = profile.eventGoal && profile.eventGoal !== 'none' && day % Math.max(3, Number(profile.days) || 4) === 2
-  if (eventActive) return ['cardio', 'hinge', 'legs', 'core', 'mobility', flags.olderAdult ? 'balance' : 'cardio']
-  const base =
-    split === 'Push' ? ['push', 'overhead', 'push', 'arms', 'push', 'overhead']
-    : split === 'Pull' ? ['pull', 'hinge', 'pull', 'pull', 'arms', 'hinge']
-    : split === 'Legs' ? ['squat', 'hinge', 'legs', 'legs', 'squat', 'legs']
-    : split === 'Chest + Back' ? ['push', 'pull', 'push', 'pull', 'push', 'pull', 'push', 'pull']
-    : split === 'Shoulders + Arms' ? ['overhead', 'arms', 'overhead', 'arms', 'pull', 'push']
-    : split === 'Conditioning + Core' || split === 'Athletic' ? ['cardio', 'core', 'legs', 'pull', 'hinge', 'core']
-    : split === 'Lower' ? ['squat', 'hinge', 'legs', 'legs', 'squat', 'legs']
-    : ['push', 'pull', 'overhead', 'pull', 'push', 'arms']
-
-  let categories = [...base]
-  const hasDedicatedCoreDay = split === 'Conditioning + Core' || split === 'Athletic'
-  if (!hasDedicatedCoreDay && day % 2 === 0) categories = insertWithinWorkout(categories, 'core', targetExercises)
-  if (flags.healthGoal) categories = insertWithinWorkout(categories, 'cardio', targetExercises)
-  if (flags.olderAdult) categories = insertWithinWorkout(categories, 'balance', targetExercises)
-  else if (flags.medicalRisk && !flags.healthGoal) categories = insertWithinWorkout(categories, 'mobility', targetExercises)
-  return categories
-}
-
-const schemeForCategory = (category, profile, baseScheme, flags, event, weekPlan, week) => {
-  const phase = phaseForWeek(week)
-  const goals = goalFlags(profile)
-  const primaryStrength = ['squat', 'hinge', 'push', 'pull'].includes(category)
-  const accessory = ['legs', 'overhead', 'arms'].includes(category)
-  if (category === 'cardio') {
-    return { sets: 1, reps: flags.shortSession ? '8-12 min' : event?.peak ? `Long session: ${weekPlan?.longRun ?? 'race'} mi / event-specific equivalent` : '20-30 min', rest: 0 }
-  }
-  if (category === 'mobility') return { sets: 2, reps: '45-60 sec', rest: 20 }
-  if (category === 'balance') return { sets: 2, reps: '30 sec', rest: 30 }
-  if (category === 'core') return { sets: flags.olderAdult ? 2 : 3, reps: flags.olderAdult ? '30 sec' : '10-14', rest: 45 }
-  if (goals.power && primaryStrength) return { sets: flags.inSeason || flags.shortSession ? 2 : 3, reps: '3-6 fast', rest: 120 }
-  if (goals.strength && primaryStrength) {
-    if (phase.name === 'Deload') return { sets: 2, reps: '5-6', rest: 120 }
-    if (phase.name === 'Peak' && !flags.medicalRisk) return { sets: flags.shortSession ? 2 : 4, reps: '3-5', rest: 180 }
-    return { sets: flags.shortSession || flags.medicalRisk || flags.beginner ? 2 : 4, reps: flags.beginner ? '6-8 controlled' : '4-6', rest: flags.beginner ? 90 : 150 }
-  }
-  if (goals.strength && goals.muscle && accessory) return { sets: flags.shortSession ? 2 : 3, reps: '8-12', rest: 75 }
-  if (goals.muscle && primaryStrength) return { sets: phase.name === 'Deload' || flags.shortSession ? 2 : 3, reps: '6-10', rest: 105 }
-  if (goals.muscle || accessory) return { sets: phase.name === 'Deload' || flags.shortSession ? 2 : 3, reps: '10-15', rest: 75 }
-  if (goals.endurance || goals.fatLoss || goals.health) return { sets: flags.shortSession ? 1 : 2, reps: '12-15', rest: 60 }
-  if (goals.independence) return { sets: 2, reps: '8-12 controlled', rest: 75 }
-  return baseScheme
-}
-
-const refineSchemeForExercise = (name, category, scheme, index, profile) => {
-  const lower = name.toLowerCase()
-  const goals = goalFlags(profile)
-  const flags = profileFlags(profile)
-  if (flags.beginner && ['squat', 'hinge', 'push', 'pull', 'overhead', 'legs', 'arms'].includes(category)) {
-    return { ...scheme, sets: Math.min(Number(scheme.sets) || 2, 2), reps: /fast|controlled/.test(String(scheme.reps)) ? scheme.reps : '8-12 controlled', rest: Math.min(Number(scheme.rest) || 75, 90) }
-  }
-  if (/fly|pec deck|face pull/.test(lower)) return { sets: 3, reps: '12-15', rest: 60 }
-  if (/external rotation|stretch|mobility/.test(lower)) return scheme
-  if (category === 'push' && goals.strength && goals.muscle && index > 1) {
-    if (/incline|machine|dumbbell|landmine|band/.test(lower)) return { sets: 3, reps: '8-10', rest: 90 }
-  }
-  if (category === 'pull' && goals.strength && goals.muscle && index > 1) {
-    if (/row|pulldown/.test(lower)) return { sets: 3, reps: '8-12', rest: 90 }
-  }
-  return scheme
-}
-
-const applySupersets = (items, profile) => {
-  const goal = goalText(profile)
-  const flags = profileFlags(profile)
-  const pairs =
-    flags.shortSession ? 3
-    : goal.includes('fat_loss') || goal.includes('health') ? 2
-    : goal.includes('muscle') && !goal.includes('strength') && items.length >= 9 ? 2
-    : 0
-  if (!pairs) return items
-  const startIndex = Math.max(2, items.length - pairs * 2)
-  return items.map((item, index) => {
-    if (index < startIndex) return item
-    const pair = Math.floor((index - startIndex) / 2)
-    const side = (index - startIndex) % 2 === 0 ? 'A' : 'B'
-    const superset = `S${pair + 1}${side}`
-    const partner = items[index + (side === 'A' ? 1 : -1)]?.name
-    return {
-      ...item,
-      superset,
-      notes: `${item.notes} Superset ${superset}${partner ? ` with ${partner}` : ''} when time or conditioning demand it.`,
-    }
+function mergePrs(existing, exercisesLogged, unit) {
+  const map = new Map(existing.map((pr) => [pr.exerciseName, pr]))
+  exercisesLogged.forEach((exercise) => {
+    exercise.sets.forEach((set) => {
+      const current = map.get(exercise.name)
+      const currentMax = current ? estimatedOneRepMax(current.weight, current.reps) : 0
+      const nextMax = estimatedOneRepMax(set.weight, set.reps)
+      if (nextMax > currentMax) {
+        map.set(exercise.name, { exerciseName: exercise.name, weight: set.weight, reps: set.reps, unit, achievedAt: new Date().toISOString() })
+      }
+    })
   })
+  return [...map.values()].sort((a, b) => estimatedOneRepMax(b.weight, b.reps) - estimatedOneRepMax(a.weight, a.reps))
 }
 
-const evidenceCue = (profile) => {
-  const tags = researchTagsForProfile(profile)
-  if (tags.includes('chronicCondition')) return 'Evidence cue: start low, progress gradually, and keep reps smooth.'
-  if (tags.includes('enduranceEvent')) return 'Evidence cue: aerobic build with protected taper and recovery.'
-  if (tags.includes('strength')) return 'Evidence cue: specific movement pattern, progressive overload, full recovery between hard sets.'
-  if (tags.includes('hypertrophy')) return 'Evidence cue: moderate reps and repeatable weekly volume.'
-  if (tags.includes('olderAdult')) return 'Evidence cue: balance plus controlled strength supports daily function.'
-  return 'Evidence cue: major movement pattern matched to goal and equipment.'
+function shouldDeload(program) {
+  const values = Object.values(program.weekFeedback ?? {}).slice(-2)
+  return values.length >= 2 && values.every((value) => value === 'hard')
 }
 
-export const buildTrainingPlan = (profile) => {
-  const meta = eventPlanMeta(profile)
-  const totalWeeks = meta.planWeeks
-  return Array.from({ length: totalWeeks }, (_, index) => {
-    const week = index + 1
-    const phase = meta.hasEvent ? eventPhaseForWeek(week, totalWeeks) : phaseForWeek(week)
-    const event = meta.event
-    const progressionWeeks = Math.max(totalWeeks - 2, 1)
-    const longRunProgress = Math.min(index, progressionWeeks - 1) / Math.max(progressionWeeks - 1, 1)
-    const longRun = event?.peak ? Math.round(event.longRun + ((event.peak - event.longRun) * longRunProgress)) : null
-    return {
-      week,
-      phase: phase.name,
-      color: phase.color,
-      focus: event?.focus ?? 'progressive overload',
-      longRun: phase.name === 'Race' ? null : phase.name === 'Taper' && longRun ? Math.max(event.longRun, Math.round(longRun * 0.6)) : longRun,
-      note:
-        phase.name === 'Race'
-          ? `${event.label} week. Keep strength work light, prioritize sleep, hydration, and race execution.`
-          : phase.name === 'Taper'
-            ? `${event.label} taper week. Reduce volume, keep easy movement, and arrive fresh.`
-            : phase.name === 'Deload'
-          ? 'Volume drops automatically unless performance data asks for a harder reset.'
-          : `${phase.name} week with ${Math.round(phase.volume * 100)}% volume and ${Math.round(phase.intensity * 100)}% intensity.`,
-    }
-  })
+function isPerformanceExercise(exercise) {
+  return exercise.logType === 'performance' || /\b(min|mi|km|m |AMRAP|EMOM|calories|rounds|pace|transition|station)\b/i.test(`${exercise.reps} ${exercise.name}`)
 }
 
-const workoutTemplate = (profile, day, week, excluded = []) => {
-  const eventSession = eventSessionTemplate(profile, day, week, excluded)
-  if (eventSession) return eventSession
-  const scheme = repScheme(profile, week)
-  const rotation = Math.floor((week - 1) / 4)
-  const sport = sportDetails(profile)
-  const event = EVENT_META[profile.eventGoal || 'none']
-  const weekPlan = buildTrainingPlan(profile)[week - 1]
-  const focusCue = sport?.qualities?.[day % sport.qualities.length] ?? 'balanced training'
-  const flags = profileFlags(profile)
-  const split = preferredSplit(profile, day)
-  const targetExercises = Math.max(6, Math.min(Number(profile.exercisesPerDay) || 6, 12))
-  const coachingNote = flags.medicalRisk
-    ? 'Medical-risk profile: keep effort conversational, avoid breath-holding, and stop for dizziness, chest pain, or unusual symptoms.'
-    : flags.beginner
-      ? 'Beginner progression: leave 3 reps in reserve and build consistency before load.'
-      : flags.inSeason
-        ? 'In-season dose: speed quality without fatigue spillover.'
-        : `Sport layer: ${focusCue}.`
-  const categories = categoriesForSplit(split, profile, day, targetExercises)
-  const accentColors = ['#C8FF00', '#A78BFA', '#60A5FA', '#FB923C']
-  const title = event?.label && event.label !== 'None' && categories[0] === 'cardio' ? `${event.label} Engine` : flags.healthGoal && split === 'Lower' ? 'Low-Impact Lower' : `${split} Training`
-  const muscleGroupsBySplit = {
-    Push: ['Chest', 'Shoulders', 'Triceps'],
-    Pull: ['Back', 'Posterior Chain', 'Core'],
-    Legs: ['Quads', 'Glutes', 'Hamstrings'],
-    Athletic: ['Full Body', 'Power', 'Core'],
-    Upper: ['Chest', 'Back', 'Shoulders'],
-    Lower: ['Quads', 'Glutes', 'Core'],
-    'Chest + Back': ['Chest', 'Back', 'Core'],
-    'Shoulders + Arms': ['Shoulders', 'Arms', 'Core'],
-    'Conditioning + Core': ['Cardio', 'Core', 'Mobility'],
-  }
-  const usedExercises = new Set()
-  const exerciseItems = []
-  for (let index = 0; index < targetExercises; index += 1) {
-    const category = categories[index % categories.length]
-    const cue = index === 0 ? `Primary pattern. Keep 2 reps in reserve during ${phaseForWeek(week).name}.` : category === 'cardio' ? (flags.medicalRisk ? coachingNote : event?.focus ?? 'Nasal breathing Zone 2.') : coachingNote
-    const selectedExercise = safeUniqueExercise(category, profile, rotation + day + index, excluded, usedExercises)
-    usedExercises.add(selectedExercise)
-    exerciseItems.push(exercise(
-      selectedExercise,
-      refineSchemeForExercise(selectedExercise, category, schemeForCategory(category, profile, scheme, flags, event, weekPlan, week), index, profile),
-      `${cue} ${coachingNote.startsWith('Sport layer') ? '' : `Sport layer: ${focusCue}. `}${evidenceCue(profile)}`.replace(/\s+/g, ' ').trim(),
-      category,
-    ))
-  }
-  const fittedExercises = fitWorkoutToDuration(exerciseItems.map((item) => ({
-    ...item,
-    sets: flags.shortSession ? Math.min(item.sets, 2) : item.sets,
-  })), profile)
+function replaceExerciseInWorkout(workout, original, replacement) {
+  return { ...workout, exercises: workout.exercises.map((exercise) => (exercise.name === original ? { ...exercise, name: replacement } : exercise)) }
+}
+
+function calculatePlates(target) {
+  let remaining = Math.max(0, target - 45) / 2
+  const plates = [45, 35, 25, 10, 5, 2.5]
+  return plates.map((plate) => {
+    const count = Math.floor(remaining / plate)
+    remaining -= count * plate
+    return [plate, count]
+  }).filter(([, count]) => count > 0)
+}
+
+function migrateData(data) {
   return {
-    title,
-    dayLabel: `Day ${day + 1}`,
-    muscleGroups: muscleGroupsBySplit[split] ?? ['Full Body', 'Core'],
-    accentColor: accentColors[day % accentColors.length],
-    rationale: sessionRationale(title, focusCue),
-    duration: sessionDurationLimit(profile.duration),
-    exercises: applySupersets(fittedExercises, profile),
+    ...data,
+    schemaVersion: DATA_SCHEMA_VERSION,
+    profile: data.profile ? savedProfileFields(data.profile) : null,
+    logs: (data.logs ?? []).filter((log) => log && log.id && log.workoutTitle),
+    prs: data.prs ?? [],
+    measurements: data.measurements ?? [],
+    achievements: data.achievements ?? [],
+    programs: (data.programs ?? []).map(migrateProgram),
   }
 }
 
-const coachingSummary = (profile) => {
-  const flags = profileFlags(profile)
-  const meta = eventPlanMeta(profile)
-  const notes = []
-  if (meta.hasEvent) {
-    notes.push(`${meta.event.label} plan is date-aware: ${meta.planWeeks} weeks to ${meta.eventDate}.`)
-    if (meta.readiness === 'compressed') notes.push(`Compressed timeline: ideal prep is about ${meta.minWeeks}+ weeks, so progression is conservative and taper is protected.`)
-  }
-  if (researchTagsForProfile(profile).includes('health')) notes.push('Guideline target: build toward 150-300 weekly moderate aerobic minutes and at least 2 strengthening days as capacity allows.')
-  if (flags.shortSession) notes.push('Sessions are compressed to the highest-value movements for a 15-20 minute window.')
-  if (flags.beginner) notes.push('Beginner load guidance: use conservative weights, stop well before failure, and prioritize habit formation.')
-  if (flags.olderAdult) notes.push('Older-adult guidance: balance, mobility, and controlled functional strength are built into the plan.')
-  if (flags.medicalRisk) notes.push('Medical-risk guidance: keep intensity moderate, avoid breath-holding, monitor symptoms, and follow clinician advice.')
-  if (flags.inSeason || flags.teen) notes.push('Athlete guidance: training volume is capped to protect sport performance and recovery.')
-  return notes.join(' ')
-}
-
-export const buildWeekSessions = (profile, week = 1, excluded = []) => {
-  const days = Math.max(2, Math.min(Number(profile.days) || 4, 6))
-  return Array.from({ length: days }, (_, index) => workoutTemplate(profile, index, week, excluded))
-}
-
-export const buildFallbackProgram = (profile) => {
-  const cleanProfile = normalizeProfile(profile)
-  const goalLabel = Array.isArray(cleanProfile.goal) ? cleanProfile.goal.join(' + ') : cleanProfile.goal || 'balanced'
-  const event = EVENT_META[cleanProfile.eventGoal || 'none']
-  const sport = sportDetails(cleanProfile)
-  const trainingPlan = buildTrainingPlan(cleanProfile)
-  const weeklyWorkouts = Object.fromEntries(trainingPlan.map((week) => [week.week, buildWeekSessions(cleanProfile, week.week)]))
-  const planSubject = event?.label && event.label !== 'None' ? event.label : sport?.label && sport.label !== 'None' ? sport.label : 'FitMe'
-  const planWeeks = eventPlanMeta(cleanProfile).planWeeks
-  return {
-    id: id('program'),
-    schemaVersion: 4,
-    signature: programSignature(cleanProfile),
-    title: `${planSubject} ${goalLabel} Plan`,
-    summary: `A ${planWeeks}-week adaptive plan for ${cleanProfile.level || 'intermediate'} training using the ${cleanProfile.equipment || 'gym'} training setup. ${sport?.label !== 'None' ? `Sport layer: ${sport.qualities.join(', ')}.` : ''} ${coachingSummary(cleanProfile)}`.trim(),
-    splitType: `${planWeeks}-week ${cleanProfile.days || 4}-day adaptive split`,
-    goal: goalLabel,
-    level: cleanProfile.level || 'intermediate',
-    age: cleanProfile.age,
-    gender: cleanProfile.gender,
-    bodyType: cleanProfile.bodyType,
-    sport: cleanProfile.sport,
-    customSport: cleanProfile.customSport,
-    equipment: cleanProfile.equipment || 'commercial gym',
-    equipmentAccess: cleanProfile.equipmentAccess,
-    equipmentDetail: cleanProfile.equipmentDetail || '',
-    split: cleanProfile.split,
-    exercisesPerDay: cleanProfile.exercisesPerDay,
-    limitations: cleanProfile.limitations || '',
-    isEventPlan: Boolean(cleanProfile.eventGoal && cleanProfile.eventGoal !== 'none'),
-    eventGoal: cleanProfile.eventGoal || 'none',
-    currentWeek: 1,
-    workouts: buildWeekSessions(cleanProfile, 1),
-    weeklyWorkouts,
-    trainingPlan,
-    researchBasis: researchTagsForProfile(cleanProfile).map((tag) => RESEARCH_RULES[tag]),
-    eventDate: cleanProfile.eventDate || '',
-    eventReadiness: eventPlanMeta(cleanProfile).readiness,
-    weekFeedback: {},
-    exerciseOverrides: {},
-    excludedExercises: [],
-    createdAt: new Date().toISOString(),
-  }
-}
-
-export const validateSet = (weight, reps) => {
-  const errors = []
-  const w = Number(weight)
-  const r = Number(reps)
-  if (!Number.isFinite(w) || w < 0 || w > 2000) errors.push('Weight must be between 0 and 2000.')
-  if (!Number.isFinite(r) || r < 0 || r > 200) errors.push('Reps must be between 0 and 200.')
-  return errors.join(' ')
-}
-
-export const estimatedOneRepMax = (weight, reps) => Math.round(Number(weight) * (1 + Number(reps) / 30))
-
-export const applyWorkoutAdjustment = (program, week, feedback) => {
-  const updated = { ...program, weekFeedback: { ...program.weekFeedback, [week]: feedback } }
-  const sessions = structuredClone(updated.weeklyWorkouts?.[week] ?? updated.workouts)
-  const multiplier = feedback === 'hard' ? 0.82 : feedback === 'easy' ? 1.12 : 1
-  updated.weeklyWorkouts = {
-    ...updated.weeklyWorkouts,
-    [week]: sessions.map((session) => ({
-      ...session,
-      exercises: session.exercises.map((ex) => ({
-        ...ex,
-        sets: Math.max(1, Math.round(ex.sets * multiplier)),
-        notes: `${ex.notes} Week marked ${feedback}; remaining work adjusted.`,
-      })),
-    })),
-  }
-  return updated
-}
-
-export const substituteExercise = (program, originalName, replacementName, persistent = false) => {
-  const replaceInSession = (session) => ({
-    ...session,
-    exercises: session.exercises.map((ex) => (ex.name === originalName ? { ...ex, name: replacementName, notes: `${ex.notes} Substituted from ${originalName}.` } : ex)),
-  })
-  const weeklyWorkouts = Object.fromEntries(
-    Object.entries(program.weeklyWorkouts ?? {}).map(([week, sessions]) => [week, sessions.map(replaceInSession)]),
+function regenerateFutureWeeks(program, patch) {
+  const profile = normalizeProfile({ ...profileFromProgram(program), ...patch })
+  const rebuilt = buildFallbackProgram(profile)
+  const currentWeek = Math.max(1, Math.min(program.currentWeek ?? 1, rebuilt.trainingPlan.length))
+  const preservedWeeks = Object.fromEntries(
+    Object.entries(program.weeklyWorkouts ?? {}).filter(([week]) => Number(week) < currentWeek),
   )
   return {
-    ...program,
-    workouts: program.workouts.map(replaceInSession),
-    weeklyWorkouts,
-    exerciseOverrides: { ...program.exerciseOverrides, [originalName]: replacementName },
-    excludedExercises: persistent ? Array.from(new Set([...(program.excludedExercises ?? []), originalName])) : program.excludedExercises,
+    ...rebuilt,
+    id: program.id,
+    createdAt: program.createdAt,
+    currentWeek,
+    weeklyWorkouts: { ...rebuilt.weeklyWorkouts, ...preservedWeeks },
+    weekFeedback: program.weekFeedback ?? {},
+    exerciseOverrides: program.exerciseOverrides ?? {},
+    excludedExercises: program.excludedExercises ?? [],
   }
 }
 
-export const parseSocialWorkout = (text) => {
-  const lines = text
-    .split(/\n|,/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-  const names = lines.length ? lines : ['Imported Squat', 'Imported Press', 'Imported Row']
-  const parsedExercise = (line) => {
-    const cleaned = line.replace(/https?:\/\/\S+/i, 'Shared movement').replace(/\s+/g, ' ').trim()
-    const match = cleaned.match(/^(.*?)(?:\s+|-)?(\d+)\s*x\s*(\d+)(?:\s*@\s*(\d+))?/i)
-    if (!match) return exercise(cleaned, { sets: 3, reps: '8-12', rest: 90 }, 'Parsed locally. AI proxy can enhance this in production.')
-    const [, rawName, sets, reps] = match
-    return exercise(rawName.trim() || 'Imported Movement', { sets: Number(sets), reps, rest: 90 }, 'Sets and reps parsed locally.')
-  }
+function migrateProgram(program) {
+  if (program.schemaVersion >= ENGINE_SCHEMA_VERSION) return program
+  const rebuilt = buildFallbackProgram(profileFromProgram(program))
   return {
-    id: id('workout'),
-    title: 'Imported Social Workout',
-    duration: 45,
-    accentColor: '#F472B6',
-    muscleGroups: ['Imported', 'Full Body'],
-    exercises: names.slice(0, 8).map(parsedExercise),
-    createdAt: new Date().toISOString(),
+    ...rebuilt,
+    id: program.id,
+    createdAt: program.createdAt ?? rebuilt.createdAt,
+    currentWeek: Math.max(1, Math.min(program.currentWeek ?? 1, rebuilt.trainingPlan.length)),
+    weekFeedback: program.weekFeedback ?? {},
+    exerciseOverrides: program.exerciseOverrides ?? {},
+    excludedExercises: program.excludedExercises ?? [],
+    schemaVersion: ENGINE_SCHEMA_VERSION,
   }
 }
+
+function profileFromProgram(program) {
+  return {
+    age: program.age,
+    gender: program.gender,
+    bodyType: program.bodyType,
+    goal: parseGoal(program.goal),
+    sport: program.sport ?? ['none'],
+    customSport: program.customSport ?? '',
+    eventGoal: inferEventGoal(program),
+    eventDate: program.eventDate ?? '',
+    equipment: program.equipment ?? 'commercial gym',
+    equipmentAccess: program.equipmentAccess ?? [],
+    equipmentDetail: program.equipmentDetail ?? '',
+    days: program.workouts?.length ?? daysFromSplitType(program.splitType),
+    duration: durationFromWorkout(program.workouts?.[0]),
+    split: program.split ?? ['upper_lower'],
+    exercisesPerDay: program.exercisesPerDay ?? program.workouts?.[0]?.exercises?.length ?? 6,
+    level: program.level ?? 'intermediate',
+    limitations: program.limitations ?? '',
+  }
+}
+
+function parseGoal(goal) {
+  if (Array.isArray(goal)) return goal
+  if (!goal) return ['health']
+  return String(goal)
+    .split('+')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function inferEventGoal(program) {
+  if (!program.isEventPlan) return 'none'
+  const title = `${program.title || ''}`.toLowerCase()
+  const entry = Object.entries(EVENT_META).find(([, meta]) => meta.label !== 'None' && title.includes(meta.label.toLowerCase()))
+  return entry?.[0] ?? 'none'
+}
+
+function inferEventLabel(program) {
+  const key = program.eventGoal || inferEventGoal(program)
+  return EVENT_META[key]?.label ?? 'Event'
+}
+
+function avoidedForLimitations(limitations = '') {
+  const lower = limitations.toLowerCase()
+  const avoided = []
+  if (lower.includes('knee')) avoided.push('deep knee-dominant squats, high-impact running, aggressive lunges')
+  if (lower.includes('shoulder') || lower.includes('rotator')) avoided.push('painful overhead/pressing volume')
+  if (lower.includes('back')) avoided.push('heavy spinal loading and unsupported hinging')
+  if (lower.includes('wrist')) avoided.push('loaded wrist extension and high-volume floor pressing')
+  if (lower.includes('ankle')) avoided.push('jumping, sprinting, and unstable single-leg impact')
+  if (lower.includes('obesity') || lower.includes('sedentary') || lower.includes('arthritis')) avoided.push('excessive impact and abrupt intensity jumps')
+  return avoided.join('; ')
+}
+
+function durationFromWorkout(workout) {
+  const duration = Number(workout?.duration)
+  if (!Number.isFinite(duration)) return '45-60 min'
+  if (duration <= 20) return '15-20 min'
+  if (duration <= 40) return '30-40 min'
+  if (duration <= 60) return '45-60 min'
+  if (duration <= 75) return '60-75 min'
+  return '75+ min'
+}
+
+function daysFromSplitType(splitType) {
+  const parsed = Number(String(splitType || '').match(/(\d+)-day/)?.[1])
+  return Number.isFinite(parsed) ? parsed : 4
+}
+
+function programSummary(program) {
+  const weeks = program.trainingPlan?.length ?? 12
+  return (program.summary || '').replace(/A\s+\d+-week adaptive plan/i, `A ${weeks}-week adaptive plan`)
+}
+
+function displaySports(program) {
+  const sports = Array.isArray(program.sport) ? program.sport : program.sport ? [program.sport] : []
+  const names = sports
+    .filter((sport) => sport && sport !== 'none' && sport !== 'other')
+    .map((sport) => SPORT_PROFILES[sport]?.label ?? sport)
+  if (program.customSport) names.push(program.customSport)
+  return [...new Set(names)].join(', ')
+}
+
+function displayProfileSports(profile) {
+  const sports = Array.isArray(profile.sport) ? profile.sport : profile.sport ? [profile.sport] : []
+  const names = sports
+    .filter((sport) => sport && sport !== 'none' && sport !== 'other')
+    .map((sport) => SPORT_PROFILES[sport]?.label ?? sport)
+  if (profile.customSport) names.push(profile.customSport)
+  return [...new Set(names)].join(', ')
+}
+
+function displaySplits(program) {
+  const labels = {
+    push_pull_legs: 'Push / Pull / Legs',
+    body_part: 'Body part',
+    upper_lower: 'Upper / Lower',
+  }
+  return (Array.isArray(program.split) ? program.split : [])
+    .map((split) => labels[split] ?? split)
+    .join(', ')
+}
+
+function displayEquipmentAccess(program) {
+  return (Array.isArray(program.equipmentAccess) ? program.equipmentAccess : [])
+    .slice(0, 4)
+    .map((item) => EQUIPMENT_ACCESS_LABELS[item] ?? item)
+    .join(', ')
+}
+
+function confirmDelete(setData, setToast) {
+  if (!window.confirm('Delete all FitMe data on this device?')) return
+  clearAccount()
+  setData(loadData())
+  setToast('Account data deleted')
+}
+
+function planResearchBasis(program) {
+  if (program.researchBasis?.length) return program.researchBasis
+  const fallback = []
+  const goal = `${program.goal || ''}`.toLowerCase()
+  if (goal.includes('strength')) fallback.push({ label: 'Strength prescription heuristic', prescription: 'Prioritizes major movement patterns, progressive overload, and adequate rest.', source: 'ACSM/NSCA-style resistance training practice' })
+  if (goal.includes('muscle')) fallback.push({ label: 'Hypertrophy prescription heuristic', prescription: 'Uses moderate reps and repeatable weekly volume for target muscles.', source: 'ACSM/NSCA-style resistance training practice' })
+  if (program.isEventPlan) fallback.push({ label: 'Endurance event progression', prescription: 'Builds event-specific conditioning, protects recovery, and tapers into event week.', source: 'Endurance coaching consensus and taper literature' })
+  if (!fallback.length) fallback.push({ label: 'HHS adult activity target', prescription: 'Build toward regular aerobic activity plus 2+ days/week of major-muscle strengthening as capacity allows.', source: 'Physical Activity Guidelines for Americans, 2nd ed.' })
+  return fallback
+}
+
+export default App

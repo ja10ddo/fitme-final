@@ -1,91 +1,123 @@
-const STORAGE_KEY = 'fitme:data:v1'
-const CORRUPT_BACKUP_PREFIX = 'fitme:data:corrupt:'
-const DATA_SCHEMA_VERSION = 2
+export const TRAINING_SETUP_OPTIONS = [
+  'commercial gym',
+  'Planet Fitness',
+  'home gym',
+  'garage gym',
+  'CrossFit box',
+  'apartment/minimal',
+  'hotel/travel',
+  'outdoor/track',
+  'dumbbells',
+  'bodyweight',
+  'bands',
+]
 
-export const initialData = {
-  schemaVersion: DATA_SCHEMA_VERSION,
-  profile: null,
-  programs: [],
-  savedWorkouts: [],
-  logs: [],
-  prs: [],
-  measurements: [],
-  achievements: [],
-  unit: 'lbs',
+export const EQUIPMENT_ACCESS_BY_SETUP = {
+  'commercial gym': [
+    'barbell_rack', 'olympic_barbell', 'plates', 'trap_bar', 'ez_bar', 'dumbbells', 'cables', 'lat_pulldown',
+    'assisted_pullup', 'machines', 'selectorized_machines', 'leg_press', 'leg_extension', 'hamstring_curl',
+    'hack_squat', 'smith_machine', 'cardio_machines', 'treadmill', 'bike', 'rower', 'elliptical', 'stair_climber',
+    'pullup_bar', 'dip_bars', 'kettlebells', 'medicine_balls', 'bands', 'trx', 'sled', 'battle_ropes',
+  ],
+  'Planet Fitness': [
+    'smith_machine', 'fixed_dumbbells', 'cables', 'selectorized_machines', 'chest_press_machine',
+    'shoulder_press_machine', 'lat_pulldown', 'seated_row_machine', 'leg_press', 'leg_extension',
+    'hamstring_curl', 'assisted_pullup', 'treadmill', 'bike', 'rower', 'elliptical', 'stair_climber',
+    'mats', 'medicine_balls', 'bands',
+  ],
+  'home gym': [
+    'rack_barbell', 'squat_stands', 'olympic_barbell', 'plates', 'adjustable_dumbbells', 'fixed_dumbbells',
+    'bench', 'pullup_bar', 'dip_bars', 'rings', 'trx', 'bands', 'kettlebells', 'medicine_balls',
+    'plyo_box', 'jump_rope', 'landmine', 'treadmill_bike', 'rower', 'assault_bike', 'foam_roller',
+  ],
+  'garage gym': [
+    'rack_barbell', 'squat_stands', 'olympic_barbell', 'plates', 'trap_bar', 'adjustable_dumbbells',
+    'bench', 'pullup_bar', 'rings', 'bands', 'kettlebells', 'medicine_balls', 'plyo_box',
+    'sled', 'sandbag', 'battle_ropes', 'jump_rope', 'rower', 'assault_bike',
+  ],
+  'CrossFit box': [
+    'rig', 'olympic_barbell', 'bumper_plates', 'dumbbells', 'kettlebells', 'rings', 'pullup_bar',
+    'plyo_box', 'wall_ball', 'medicine_balls', 'rower', 'ski_erg', 'assault_bike', 'sled',
+    'sandbag', 'battle_ropes', 'jump_rope', 'bands',
+  ],
+  'apartment/minimal': ['adjustable_dumbbells', 'fixed_dumbbells', 'bands', 'loop_bands', 'mini_bands', 'door_anchor', 'pullup_bar', 'suspension_trainer', 'yoga_mat', 'jump_rope', 'bench'],
+  'hotel/travel': ['hotel_dumbbells', 'treadmill', 'bike', 'elliptical', 'cables', 'selectorized_machines', 'bands', 'bodyweight_space', 'bench', 'yoga_mat'],
+  'outdoor/track': ['track', 'hills', 'stairs', 'pullup_bar', 'dip_bars', 'resistance_bands', 'jump_rope', 'sled', 'weighted_vest', 'open_space'],
+  dumbbells: ['adjustable_dumbbells', 'fixed_dumbbells', 'bench', 'incline_bench', 'bands', 'kettlebells', 'pullup_bar', 'yoga_mat'],
+  bodyweight: ['pullup_bar', 'dip_bars', 'rings', 'suspension_trainer', 'pushup_handles', 'bands', 'yoga_mat', 'plyo_box', 'open_space'],
+  bands: ['loop_bands', 'handled_bands', 'door_anchor', 'mini_bands', 'long_resistance_band', 'hip_circle', 'yoga_mat'],
 }
 
-const freshInitialData = (extra = {}) => ({
-  ...initialData,
-  programs: [],
-  savedWorkouts: [],
-  logs: [],
-  prs: [],
-  measurements: [],
-  achievements: [],
-  ...extra,
-})
-
-export const loadData = () => {
-  if (typeof localStorage === 'undefined') return freshInitialData()
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return freshInitialData()
-    const parsed = JSON.parse(raw)
-    return {
-      ...freshInitialData(),
-      ...parsed,
-      schemaVersion: DATA_SCHEMA_VERSION,
-      programs: Array.isArray(parsed.programs) ? parsed.programs : [],
-      savedWorkouts: Array.isArray(parsed.savedWorkouts) ? parsed.savedWorkouts : [],
-      logs: Array.isArray(parsed.logs) ? parsed.logs : [],
-      prs: Array.isArray(parsed.prs) ? parsed.prs : [],
-      measurements: Array.isArray(parsed.measurements) ? parsed.measurements : [],
-      achievements: Array.isArray(parsed.achievements) ? parsed.achievements : [],
-    }
-  } catch (error) {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw) localStorage.setItem(`${CORRUPT_BACKUP_PREFIX}${new Date().toISOString()}`, raw)
-      localStorage.removeItem(STORAGE_KEY)
-      console.warn('FitMe recovered from corrupted local data.', error)
-    } catch {
-      // Ignore recovery failures and return a clean state.
-    }
-    return freshInitialData({ recoveryNotice: 'Recovered from corrupted local data. A backup copy was kept in localStorage when possible.' })
-  }
+export const EQUIPMENT_ACCESS_LABELS = {
+  barbell_rack: 'Barbell and rack',
+  rack_barbell: 'Rack and barbell',
+  squat_stands: 'Squat stands',
+  olympic_barbell: 'Olympic barbell',
+  plates: 'Weight plates',
+  bumper_plates: 'Bumper plates',
+  trap_bar: 'Trap bar',
+  ez_bar: 'EZ curl bar',
+  dumbbells: 'Dumbbells',
+  adjustable_dumbbells: 'Adjustable dumbbells',
+  fixed_dumbbells: 'Fixed dumbbells',
+  hotel_dumbbells: 'Hotel dumbbells',
+  cables: 'Cable station',
+  lat_pulldown: 'Lat pulldown',
+  machines: 'Machines',
+  selectorized_machines: 'Selectorized machines',
+  chest_press_machine: 'Chest press machine',
+  shoulder_press_machine: 'Shoulder press machine',
+  seated_row_machine: 'Seated row machine',
+  cardio_machines: 'Cardio machines',
+  smith_machine: 'Smith machine',
+  treadmill: 'Treadmill',
+  bike: 'Bike',
+  rower: 'Rower',
+  ski_erg: 'SkiErg',
+  assault_bike: 'Assault bike',
+  elliptical: 'Elliptical',
+  stair_climber: 'Stair climber',
+  leg_press: 'Leg press',
+  leg_extension: 'Leg extension',
+  hamstring_curl: 'Hamstring curl',
+  hack_squat: 'Hack squat',
+  assisted_pullup: 'Assisted pull-up',
+  pullup_bar: 'Pull-up bar',
+  dip_bars: 'Dip bars',
+  rings: 'Gymnastics rings',
+  suspension_trainer: 'Suspension trainer',
+  trx: 'TRX / suspension trainer',
+  kettlebells: 'Kettlebells',
+  medicine_balls: 'Medicine balls',
+  wall_ball: 'Wall ball',
+  bands: 'Bands',
+  resistance_bands: 'Resistance bands',
+  loop_bands: 'Loop bands',
+  handled_bands: 'Handled bands',
+  door_anchor: 'Door anchor',
+  mini_bands: 'Mini bands',
+  long_resistance_band: 'Long resistance band',
+  hip_circle: 'Hip circle',
+  bench: 'Bench',
+  incline_bench: 'Incline bench',
+  treadmill_bike: 'Treadmill or bike',
+  rig: 'Rig',
+  plyo_box: 'Plyo box',
+  jump_rope: 'Jump rope',
+  landmine: 'Landmine attachment',
+  sled: 'Sled',
+  sandbag: 'Sandbag',
+  battle_ropes: 'Battle ropes',
+  foam_roller: 'Foam roller',
+  mats: 'Mats',
+  yoga_mat: 'Yoga mat',
+  bodyweight_space: 'Bodyweight space',
+  pushup_handles: 'Push-up handles',
+  track: 'Track',
+  hills: 'Hills',
+  stairs: 'Stairs',
+  weighted_vest: 'Weighted vest',
+  open_space: 'Open space',
 }
 
-export const saveData = (data) => {
-  if (typeof localStorage === 'undefined') return { ok: true }
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...data, schemaVersion: DATA_SCHEMA_VERSION }))
-    return { ok: true }
-  } catch (error) {
-    console.warn('FitMe could not save local data.', error)
-    return {
-      ok: false,
-      message: 'FitMe could not save on this device. Export your data, then free storage or check browser privacy settings.',
-    }
-  }
-}
-
-export const exportJson = (data) => {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `fitme-export-${new Date().toISOString().slice(0, 10)}.json`
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  URL.revokeObjectURL(url)
-}
-
-export const clearAccount = () => {
-  if (typeof localStorage === 'undefined') return
-  localStorage.removeItem(STORAGE_KEY)
-  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
-    const key = localStorage.key(index)
-    if (key?.startsWith(CORRUPT_BACKUP_PREFIX)) localStorage.removeItem(key)
-  }
-}
+export const defaultEquipmentAccess = (setup) => [...(EQUIPMENT_ACCESS_BY_SETUP[setup] ?? EQUIPMENT_ACCESS_BY_SETUP['commercial gym'])]
