@@ -1,0 +1,35 @@
+{
+  "name": "FitMe",
+  "short_name": "FitMe",
+  "description": "Adaptive strength, sport, and event training plans.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#0D0D0D",
+  "theme_color": "#0D0D0D",
+  "orientation": "portrait",
+  "categories": ["fitness", "health", "sports"],
+  "shortcuts": [
+    {
+      "name": "Build Plan",
+      "short_name": "Plan",
+      "description": "Create an adaptive FitMe program.",
+      "url": "/?action=plan"
+    },
+    {
+      "name": "Open Progress",
+      "short_name": "Progress",
+      "description": "View training progress.",
+      "url": "/?action=progress"
+    }
+  ],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
